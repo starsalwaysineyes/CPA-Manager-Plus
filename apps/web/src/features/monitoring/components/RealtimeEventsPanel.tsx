@@ -102,6 +102,21 @@ const formatReadableText = (value: string | null | undefined) => {
   return trimmed && trimmed !== '-' ? trimmed : '';
 };
 
+const requestResultLabel = (row: MonitoringEventRow, t: TFunction) => {
+  if (row.internalRetryRecovered) {
+    return t('monitoring.result_internal_retry_recovered');
+  }
+  if (row.recoveredAfterRetry) {
+    return t('monitoring.result_recovered_after_retry');
+  }
+  return t(row.failed ? 'monitoring.result_failed' : 'monitoring.result_success');
+};
+
+const transportLabel = (row: MonitoringEventRow, t: TFunction) =>
+  row.transport === 'websocket'
+    ? t('monitoring.transport_websocket')
+    : t('monitoring.transport_http');
+
 const shortLabel = (
   t: TFunction,
   shortKey: string,
@@ -440,6 +455,9 @@ const buildHeaderDiagnosticParts = (
 
 const buildRequestDiagnosticMetaText = (row: MonitoringEventRow, t: TFunction, locale: string) => {
   const parts: string[] = [];
+  if (row.internalRetryRecovered || row.recoveredAfterRetry) {
+    parts.push(requestResultLabel(row, t));
+  }
   if (row.failed && row.failStatusCode) {
     parts.push(
       `${shortLabel(t, 'monitoring.fail_status_code_short', 'monitoring.fail_status_code')} ${row.failStatusCode}`
@@ -466,12 +484,22 @@ const buildRequestDiagnosticDetails = (row: MonitoringEventRow, t: TFunction, lo
       : t(row.failed ? 'monitoring.result_failed' : 'monitoring.result_success');
   return {
     failed: row.failed,
+    internalRetryRecovered: row.internalRetryRecovered,
+    resultLabel: requestResultLabel(row, t),
     statusCode: row.failStatusCode,
     statusText,
     summary,
     diagnostics,
     label: buildRequestDiagnosticMetaText(row, t, locale),
-    copyText: [statusText, summary, ...diagnostics].filter(Boolean).join('\n'),
+    copyText: [
+      requestResultLabel(row, t),
+      `${t('monitoring.transport')}: ${transportLabel(row, t)}`,
+      statusText,
+      summary,
+      ...diagnostics,
+    ]
+      .filter(Boolean)
+      .join('\n'),
   };
 };
 
@@ -595,6 +623,7 @@ function RealtimeRequestDiagnosticStatus({
   const tooltipClassName = [
     styles.realtimeFailureTooltip,
     !details.failed ? styles.realtimeSuccessDiagnosticTooltip : '',
+    details.internalRetryRecovered ? styles.realtimeRecoveredDiagnosticTooltip : '',
     placement === 'above' ? styles.realtimeFailureTooltipAbove : styles.realtimeFailureTooltipBelow,
     open ? styles.realtimeFailureTooltipOpen : '',
   ]
@@ -652,10 +681,14 @@ function RealtimeRequestDiagnosticStatus({
     >
       <span
         className={`${styles.realtimeRequestStatus} ${
-          details.failed ? styles.realtimeRequestStatusBad : styles.realtimeRequestStatusGood
+          details.internalRetryRecovered
+            ? styles.realtimeRequestStatusWarn
+            : details.failed
+              ? styles.realtimeRequestStatusBad
+              : styles.realtimeRequestStatusGood
         }`}
       >
-        {t(details.failed ? 'monitoring.result_failed' : 'monitoring.result_success')}
+        {details.resultLabel}
       </span>
       {!isBrowser ? tooltip : null}
       {isBrowser && open ? createPortal(tooltip, document.body) : null}
@@ -913,7 +946,16 @@ export function RealtimeEventsPanel({
               const latencyToneClass = getRealtimeDurationToneClass(row.latencyMs);
               const tokenSummary = buildRealtimeTokenSummary(row, t);
               return (
-                <tr key={row.id} className={row.failed ? styles.logRowFailed : undefined}>
+                <tr
+                  key={row.id}
+                  className={
+                    row.internalRetryRecovered
+                      ? styles.logRowRecoveredFailure
+                      : row.failed
+                        ? styles.logRowFailed
+                        : undefined
+                  }
+                >
                   <td>
                     <div className={styles.logTypeCell}>
                       <div className={styles.primaryCell} title={sourceDisplay.title}>
@@ -982,18 +1024,31 @@ export function RealtimeEventsPanel({
                         <span
                           className={[
                             styles.realtimeRequestStatus,
-                            row.failed
+                            row.internalRetryRecovered
+                              ? styles.realtimeRequestStatusWarn
+                              : row.failed
                               ? styles.realtimeRequestStatusBad
                               : styles.realtimeRequestStatusGood,
                           ]
                             .filter(Boolean)
                             .join(' ')}
                         >
-                          {row.failed
-                            ? t('monitoring.result_failed')
-                            : t('monitoring.result_success')}
+                          {requestResultLabel(row, t)}
                         </span>
                       )}
+                      <small
+                        className={styles.realtimeTransportBadge}
+                        title={[
+                          `${t('monitoring.transport')}: ${transportLabel(row, t)}`,
+                          formatReadableText(row.executorType)
+                            ? `${shortLabel(t, 'monitoring.executor_type_short', 'monitoring.executor_type')}: ${formatReadableText(row.executorType)}`
+                            : '',
+                        ]
+                          .filter(Boolean)
+                          .join('\n')}
+                      >
+                        {transportLabel(row, t)}
+                      </small>
                     </div>
                   </td>
                   <td

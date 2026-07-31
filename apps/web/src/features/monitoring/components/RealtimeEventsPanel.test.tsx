@@ -51,6 +51,11 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'monitoring.request_status': 'Status',
     'monitoring.result_failed': 'Failed',
     'monitoring.result_success': 'Success',
+    'monitoring.result_internal_retry_recovered': 'Silent failure · recovered',
+    'monitoring.result_recovered_after_retry': 'Succeeded after retry',
+    'monitoring.transport': 'Transport',
+    'monitoring.transport_http': 'HTTP',
+    'monitoring.transport_websocket': 'WebSocket',
     'monitoring.provider_usage_xai_exhausted': 'xAI included free usage exhausted',
     'monitoring.provider_usage_remaining': 'Remaining',
     'monitoring.provider_usage_overage': 'Overage',
@@ -136,6 +141,9 @@ const baseRow = (overrides: Partial<PanelRow> = {}): PanelRow => ({
   cacheCreationTokens: 0,
   totalTokens: 33,
   totalCost: 0,
+  transport: 'http',
+  internalRetryRecovered: false,
+  recoveredAfterRetry: false,
   taskKey: 'task-1',
   searchText: '',
   requestCount: 1,
@@ -213,7 +221,7 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).toContain('>TPS</th>');
     expect(markup).toContain('Source / API Key');
     expect(markup).not.toContain('>Executor: codex<');
-    expect(markup).not.toContain('Executor: codex');
+    expect(markup).toContain('Executor: codex');
     expect(markup).toContain('medium');
     expect(markup).toContain('Requested tier: priority');
     expect(markup).toContain('Reported tier: default');
@@ -237,6 +245,43 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).toContain('aria-label="Copy"');
     expect(markup).toContain('HTTP 429');
     expect(markup).toContain('rate limit exceeded');
+  });
+
+  it('distinguishes recovered internal failures and WebSocket transport', () => {
+    const markup = renderPanel(
+      baseRow({
+        failed: true,
+        successRate: 0,
+        executorType: 'CodexWebsocketsExecutor',
+        transport: 'websocket',
+        internalRetryRecovered: true,
+        failStatusCode: 502,
+        failSummary: 'server is overloaded',
+      })
+    );
+
+    expect(markup).toContain('Silent failure · recovered');
+    expect(markup).toContain('WebSocket');
+    expect(markup).toContain('Transport: WebSocket');
+    expect(markup).toContain('HTTP 502');
+    expect(markup).toContain(styles.logRowRecoveredFailure);
+    expect(markup).toContain(styles.realtimeRequestStatusWarn);
+    expect(markup).toContain(styles.realtimeRecoveredDiagnosticTooltip);
+    expect(markup).not.toContain(styles.logRowFailed);
+  });
+
+  it('shows a successful HTTP request recovered after retry', () => {
+    const markup = renderPanel(
+      baseRow({
+        recoveredAfterRetry: true,
+        executorType: 'CodexExecutor',
+      })
+    );
+
+    expect(markup).toContain('Succeeded after retry');
+    expect(markup).toContain('HTTP');
+    expect(markup).toContain('Transport: HTTP');
+    expect(markup).toContain(styles.realtimeRequestStatusGood);
   });
 
   it('renders structured xAI free-usage exhaustion evidence', () => {
@@ -324,7 +369,8 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).not.toContain('CW 0');
     expect(markup).not.toContain('role="tooltip"');
     expect(markup).not.toContain('aria-describedby=');
-    expect(markup).not.toContain('HTTP');
+    expect(markup).toContain('Transport: HTTP');
+    expect(markup).toContain('>HTTP</small>');
   });
 
   it('renders API key alias inside the source cell without adding another column', () => {

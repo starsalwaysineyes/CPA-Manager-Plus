@@ -187,6 +187,9 @@ export type MonitoringEventRow = {
   requestServiceTier?: string;
   responseServiceTier?: string;
   executorType?: string;
+  transport?: 'http' | 'websocket';
+  internalRetryRecovered?: boolean;
+  recoveredAfterRetry?: boolean;
   failStatusCode?: number | null;
   failSummary?: string;
   responseMetadata?: ResponseHeaderMetadata;

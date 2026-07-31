@@ -721,6 +721,9 @@ type EventRow struct {
 	HeaderErrorKind        string                        `json:"header_error_kind,omitempty"`
 	HeaderErrorCode        string                        `json:"header_error_code,omitempty"`
 	HeaderTraceID          string                        `json:"header_trace_id,omitempty"`
+	Transport              string                        `json:"transport"`
+	InternalRetryRecovered bool                          `json:"internal_retry_recovered,omitempty"`
+	RecoveredAfterRetry    bool                          `json:"recovered_after_retry,omitempty"`
 }
 
 func (s *Service) Analytics(ctx context.Context, req Request) (Response, error) {
@@ -2929,9 +2932,19 @@ func buildEvents(page store.EventsPage, totalCount int64) *EventsResponse {
 			HeaderErrorKind:        item.HeaderErrorKind,
 			HeaderErrorCode:        item.HeaderErrorCode,
 			HeaderTraceID:          item.HeaderTraceID,
+			Transport:              eventTransport(item.ExecutorType),
+			InternalRetryRecovered: item.InternalRetryRecovered,
+			RecoveredAfterRetry:    item.RecoveredAfterRetry,
 		})
 	}
 	return &EventsResponse{Items: items, NextBeforeMS: page.NextBeforeMS, NextBeforeID: page.NextBeforeID, HasMore: page.HasMore, TotalCount: totalCount}
+}
+
+func eventTransport(executorType string) string {
+	if strings.Contains(strings.ToLower(executorType), "websocket") {
+		return "websocket"
+	}
+	return "http"
 }
 
 func buildHeaderSnapshots(items []store.HeaderSnapshot) []HeaderSnapshot {

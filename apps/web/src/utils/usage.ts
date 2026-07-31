@@ -173,6 +173,11 @@ export interface UsageDetail {
   cacheInputMode?: CacheInputMode | string;
   executor_type?: string;
   executorType?: string;
+  transport?: string;
+  internal_retry_recovered?: boolean;
+  internalRetryRecovered?: boolean;
+  recovered_after_retry?: boolean;
+  recoveredAfterRetry?: boolean;
   provider?: string;
   requested_model?: string;
   requestedModel?: string;

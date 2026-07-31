@@ -1120,6 +1120,25 @@
     color: var(--monitor-red);
   }
 
+  .realtimeRequestStatusWarn {
+    color: var(--monitor-amber);
+  }
+
+  .realtimeTransportBadge {
+    display: inline-flex;
+    width: max-content;
+    align-items: center;
+    padding: 2px 6px;
+    border: 1px solid color-mix(in srgb, var(--monitor-accent) 22%, var(--monitor-line));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--monitor-accent) 7%, var(--monitor-surface));
+    color: var(--monitor-muted);
+    font-size: 10px;
+    font-weight: 750;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+
   .realtimeFailureTooltip {
     --monitor-surface: var(--bg-primary);
     --monitor-surface-elevated: color-mix(in srgb, var(--bg-primary) 82%, var(--surface-subtle));
@@ -1163,6 +1182,10 @@
 
   .realtimeSuccessDiagnosticTooltip {
     --monitor-diagnostic-color: var(--monitor-green);
+  }
+
+  .realtimeRecoveredDiagnosticTooltip {
+    --monitor-diagnostic-color: var(--monitor-amber);
   }
 
   .realtimeFailureTooltip::before {

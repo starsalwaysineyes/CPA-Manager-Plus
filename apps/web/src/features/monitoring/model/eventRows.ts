@@ -140,6 +140,16 @@ export const buildEventRows = (
         readString(detail.service_tier ?? detail.serviceTier) ||
         responseServiceTier;
       const executorType = readString(detail.executor_type ?? detail.executorType);
+      const explicitTransport = readString(detail.transport).toLowerCase();
+      const transport =
+        explicitTransport === 'websocket' ||
+        (!explicitTransport && executorType.toLowerCase().includes('websocket'))
+          ? 'websocket'
+          : 'http';
+      const internalRetryRecovered =
+        detail.internal_retry_recovered === true || detail.internalRetryRecovered === true;
+      const recoveredAfterRetry =
+        detail.recovered_after_retry === true || detail.recoveredAfterRetry === true;
       const failStatusCodeRaw = detail.fail_status_code ?? detail.failStatusCode;
       const failStatusCode =
         failStatusCodeRaw === null || failStatusCodeRaw === undefined
@@ -229,6 +239,9 @@ export const buildEventRows = (
         requestServiceTier,
         responseServiceTier,
         executorType,
+        transport,
+        internalRetryRecovered,
+        recoveredAfterRetry,
         failStatusCode: normalizedFailStatusCode,
         failSummary,
         responseMetadata,
@@ -258,6 +271,9 @@ export const buildEventRows = (
           projectId,
           reasoningEffort,
           serviceTier,
+          transport,
+          internalRetryRecovered ? 'internal retry recovered' : '',
+          recoveredAfterRetry ? 'recovered after retry' : '',
           requestServiceTier,
           responseServiceTier,
           executorType,

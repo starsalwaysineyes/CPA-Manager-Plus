@@ -1485,6 +1485,21 @@
   background: color-mix(in srgb, var(--monitor-red) 9%, var(--monitor-surface-hover));
 }
 
+.logRowRecoveredFailure td {
+  border-top-color: color-mix(in srgb, var(--monitor-amber) 32%, var(--monitor-line));
+  border-bottom-color: color-mix(in srgb, var(--monitor-amber) 32%, var(--monitor-line));
+  background: color-mix(in srgb, var(--monitor-amber) 8%, var(--monitor-surface-elevated));
+}
+
+.logRowRecoveredFailure td:first-child,
+.logRowRecoveredFailure td:last-child {
+  border-color: color-mix(in srgb, var(--monitor-amber) 32%, var(--monitor-line));
+}
+
+.logRowRecoveredFailure:hover td {
+  background: color-mix(in srgb, var(--monitor-amber) 11%, var(--monitor-surface-hover));
+}
+
 .emptyBlock,
 .emptyTable,
 .emptyBlockSmall {

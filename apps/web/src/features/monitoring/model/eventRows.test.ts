@@ -104,6 +104,33 @@ describe('buildEventRows', () => {
     expect(row.searchText).toContain('medium');
   });
 
+  it('keeps server-derived retry recovery and transport classifications', () => {
+    const [row] = buildRows({
+      failed: true,
+      executor_type: 'CodexWebsocketsExecutor',
+      transport: 'websocket',
+      internal_retry_recovered: true,
+    });
+
+    expect(row.transport).toBe('websocket');
+    expect(row.internalRetryRecovered).toBe(true);
+    expect(row.recoveredAfterRetry).toBe(false);
+    expect(row.searchText).toContain('websocket');
+    expect(row.searchText).toContain('internal retry recovered');
+  });
+
+  it('falls back to HTTP and detects retry success metadata', () => {
+    const [row] = buildRows({
+      executor_type: 'CodexExecutor',
+      recovered_after_retry: true,
+    });
+
+    expect(row.transport).toBe('http');
+    expect(row.internalRetryRecovered).toBe(false);
+    expect(row.recoveredAfterRetry).toBe(true);
+    expect(row.searchText).toContain('recovered after retry');
+  });
+
   it('keeps response header diagnostics searchable', () => {
     const [row] = buildRows({
       failed: true,

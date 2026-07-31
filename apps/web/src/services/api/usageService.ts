@@ -1348,6 +1348,9 @@ export interface MonitoringAnalyticsEventRow {
   reasoning_effort?: string;
   service_tier?: string;
   executor_type?: string;
+  transport?: 'http' | 'websocket' | string;
+  internal_retry_recovered?: boolean;
+  recovered_after_retry?: boolean;
   input_tokens: number;
   output_tokens: number;
   cached_tokens: number;

@@ -991,6 +991,9 @@ export const buildUsageDetailsFromAnalyticsEvents = (
     reasoning_effort: readString(item.reasoning_effort),
     service_tier: readString(item.service_tier),
     executor_type: readString(item.executor_type),
+    transport: readString(item.transport),
+    internal_retry_recovered: item.internal_retry_recovered === true,
+    recovered_after_retry: item.recovered_after_retry === true,
     latency_ms: item.latency_ms ?? undefined,
     ttft_ms: item.ttft_ms ?? undefined,
     tokens: {

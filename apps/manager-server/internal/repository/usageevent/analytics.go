@@ -15,6 +15,7 @@ import (
 
 var (
 	longContextThresholdSQL = strconv.FormatInt(usage.LongContextInputTokenThreshold, 10)
+	internalRetryWindowSQL  = strconv.FormatInt((2 * time.Minute).Milliseconds(), 10)
 	compatCachedExpr        = "max(max(cached_tokens, cache_tokens) - max(cache_read_tokens, 0) - max(cache_creation_tokens, 0), 0)"
 	compatCachedFExpr       = "max(max(f.cached_tokens, f.cache_tokens) - max(f.cache_read_tokens, 0) - max(f.cache_creation_tokens, 0), 0)"
 	normalizedInputExpr     = "coalesce(normalized_total_input_tokens, input_tokens)"
@@ -408,6 +409,8 @@ type EventPageItem struct {
 	HeaderErrorKind        string
 	HeaderErrorCode        string
 	HeaderTraceID          string
+	InternalRetryRecovered bool
+	RecoveredAfterRetry    bool
 }
 
 type EventsPage struct {
@@ -2204,8 +2207,33 @@ func (r *repository) EventsPageWithFilter(ctx context.Context, filter AnalyticsF
 			args = append(args, beforeMS)
 		}
 	}
-	args = append(args, queryLimit)
-	rows, err := r.db.QueryContext(ctx, `select
+	retryWindowMS := (2 * time.Minute).Milliseconds()
+	retryFromMS := max(filter.FromMS-retryWindowMS, int64(0))
+	retryToMS := filter.ToMS + retryWindowMS
+	queryArgs := make([]any, 0, len(args)+3)
+	queryArgs = append(queryArgs, retryFromMS, retryToMS)
+	queryArgs = append(queryArgs, args...)
+	queryArgs = append(queryArgs, queryLimit)
+	rows, err := r.db.QueryContext(ctx, `with retry_context as (
+	select
+		id as event_id,
+		lag(failed) over retry_chain as previous_failed,
+		lag(timestamp_ms) over retry_chain as previous_timestamp_ms,
+		min(case when failed = 0 then timestamp_ms end) over (
+			partition by request_id, coalesce(api_key_hash, ''), model, coalesce(path, '')
+			order by timestamp_ms, id
+			rows between 1 following and unbounded following
+		) as next_success_timestamp_ms
+	from usage_events
+	where timestamp_ms >= ?
+		and timestamp_ms < ?
+		and coalesce(request_id, '') <> ''
+	window retry_chain as (
+		partition by request_id, coalesce(api_key_hash, ''), model, coalesce(path, '')
+		order by timestamp_ms, id
+	)
+)
+select
 	id,
 	coalesce(request_id, ''),
 	event_hash,
@@ -2246,10 +2274,27 @@ func (r *repository) EventsPageWithFilter(ctx context.Context, filter AnalyticsF
 	coalesce(header_quota_plan_type, ''),
 	coalesce(header_error_kind, ''),
 	coalesce(header_error_code, ''),
-	coalesce(header_trace_id, '')
-from usage_events `+where+`
+	coalesce(header_trace_id, ''),
+	case
+		when failed = 1
+			and coalesce(request_id, '') <> ''
+			and retry_context.next_success_timestamp_ms <= timestamp_ms + `+internalRetryWindowSQL+`
+		then 1
+		else 0
+	end,
+	case
+		when failed = 0
+			and coalesce(request_id, '') <> ''
+			and retry_context.previous_failed = 1
+			and retry_context.previous_timestamp_ms >= timestamp_ms - `+internalRetryWindowSQL+`
+		then 1
+		else 0
+	end
+from usage_events
+left join retry_context on retry_context.event_id = usage_events.id
+`+where+`
 order by timestamp_ms desc, id desc
-limit ?`, args...)
+limit ?`, queryArgs...)
 	if err != nil {
 		return EventsPage{}, err
 	}
@@ -2259,6 +2304,8 @@ limit ?`, args...)
 	for rows.Next() {
 		var item EventPageItem
 		var failed int
+		var internalRetryRecovered int
+		var recoveredAfterRetry int
 		var responseMetadataJSON string
 		if err := rows.Scan(
 			&item.ID,
@@ -2302,10 +2349,14 @@ limit ?`, args...)
 			&item.HeaderErrorKind,
 			&item.HeaderErrorCode,
 			&item.HeaderTraceID,
+			&internalRetryRecovered,
+			&recoveredAfterRetry,
 		); err != nil {
 			return EventsPage{}, err
 		}
 		item.Failed = failed != 0
+		item.InternalRetryRecovered = internalRetryRecovered != 0
+		item.RecoveredAfterRetry = recoveredAfterRetry != 0
 		item.ResponseMetadata = usage.ResponseHeaderMetadataFromJSON(responseMetadataJSON)
 		items = append(items, item)
 	}
