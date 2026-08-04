@@ -365,6 +365,17 @@ const buildHeaderDiagnosticParts = (
       `${t('monitoring.provider_usage_xai_exhausted', { defaultValue: 'xAI included free usage exhausted' })}${usageParts.length > 0 ? `: ${usageParts.join(' · ')}` : ''}`
     );
   }
+  const embeddingCache = row.responseMetadata?.embedding_cache;
+  if (embeddingCache) {
+    const cacheParts = [
+      `${t('monitoring.embedding_cache_hits', { defaultValue: 'hits' })} ${formatCount(embeddingCache.hits ?? 0)} / ${formatCount(embeddingCache.inputs ?? 0)}`,
+      `${t('monitoring.embedding_cache_misses', { defaultValue: 'misses' })} ${formatCount(embeddingCache.misses ?? 0)}`,
+      `${t('monitoring.embedding_cache_upstream', { defaultValue: 'upstream' })} ${formatCount(embeddingCache.upstream_inputs ?? 0)}`,
+    ];
+    parts.push(
+      `${t('monitoring.embedding_cache', { defaultValue: 'Embedding cache' })} (${embeddingCache.status || '-'}): ${cacheParts.join(' · ')}`
+    );
+  }
   const quotaParts: string[] = [];
   const planType =
     row.headerQuotaPlanType ||
@@ -945,6 +956,7 @@ export function RealtimeEventsPanel({
               const ttftToneClass = getRealtimeDurationToneClass(row.ttftMs);
               const latencyToneClass = getRealtimeDurationToneClass(row.latencyMs);
               const tokenSummary = buildRealtimeTokenSummary(row, t);
+              const embeddingCache = row.responseMetadata?.embedding_cache;
               return (
                 <tr
                   key={row.id}
@@ -982,6 +994,11 @@ export function RealtimeEventsPanel({
                       {showResolvedModel ? (
                         <small className={`${styles.monoCell} ${styles.realtimeModelText}`}>
                           {row.resolvedModel}
+                        </small>
+                      ) : null}
+                      {embeddingCache ? (
+                        <small>
+                          {`${t('monitoring.embedding_cache', { defaultValue: 'Embedding cache' })}: ${embeddingCache.status || '-'} · ${embeddingCache.hits ?? 0}/${embeddingCache.inputs ?? 0} · ↑${embeddingCache.upstream_inputs ?? 0}`}
                         </small>
                       ) : null}
                     </div>

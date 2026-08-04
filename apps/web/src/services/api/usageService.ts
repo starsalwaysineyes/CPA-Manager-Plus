@@ -1246,6 +1246,14 @@ export interface ResponseHeaderDataPolicyMetadata {
   zero_retention?: boolean;
 }
 
+export interface ResponseHeaderEmbeddingCacheMetadata {
+  status?: 'hit' | 'partial' | 'miss' | string;
+  inputs?: number;
+  hits?: number;
+  misses?: number;
+  upstream_inputs?: number;
+}
+
 export interface ProviderUsageMetadata {
   provider?: string;
   kind?: string;
@@ -1274,6 +1282,7 @@ export interface ResponseHeaderMetadata {
   rate_limit?: ResponseHeaderRateLimitMetadata;
   data_policy?: ResponseHeaderDataPolicyMetadata;
   provider_usage?: ProviderUsageMetadata;
+  embedding_cache?: ResponseHeaderEmbeddingCacheMetadata;
 }
 
 export interface UsageHeaderSnapshot {

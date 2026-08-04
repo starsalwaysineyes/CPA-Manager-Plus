@@ -11,15 +11,16 @@ import (
 )
 
 type ResponseHeaderMetadata struct {
-	Quota         *HeaderQuotaMetadata      `json:"quota,omitempty"`
-	Errors        *HeaderErrorMetadata      `json:"errors,omitempty"`
-	Trace         *HeaderTraceMetadata      `json:"trace,omitempty"`
-	Routing       *HeaderRoutingMetadata    `json:"routing,omitempty"`
-	Response      *HeaderResponseMetadata   `json:"response,omitempty"`
-	Providers     *HeaderProviderMetadata   `json:"providers,omitempty"`
-	RateLimit     *HeaderRateLimitMetadata  `json:"rate_limit,omitempty"`
-	DataPolicy    *HeaderDataPolicyMetadata `json:"data_policy,omitempty"`
-	ProviderUsage *ProviderUsageMetadata    `json:"provider_usage,omitempty"`
+	Quota          *HeaderQuotaMetadata          `json:"quota,omitempty"`
+	Errors         *HeaderErrorMetadata          `json:"errors,omitempty"`
+	Trace          *HeaderTraceMetadata          `json:"trace,omitempty"`
+	Routing        *HeaderRoutingMetadata        `json:"routing,omitempty"`
+	Response       *HeaderResponseMetadata       `json:"response,omitempty"`
+	Providers      *HeaderProviderMetadata       `json:"providers,omitempty"`
+	RateLimit      *HeaderRateLimitMetadata      `json:"rate_limit,omitempty"`
+	DataPolicy     *HeaderDataPolicyMetadata     `json:"data_policy,omitempty"`
+	ProviderUsage  *ProviderUsageMetadata        `json:"provider_usage,omitempty"`
+	EmbeddingCache *HeaderEmbeddingCacheMetadata `json:"embedding_cache,omitempty"`
 }
 
 type HeaderQuotaMetadata struct {
@@ -115,6 +116,14 @@ type HeaderDataPolicyMetadata struct {
 	ZeroRetention *bool  `json:"zero_retention,omitempty"`
 }
 
+type HeaderEmbeddingCacheMetadata struct {
+	Status         string `json:"status,omitempty"`
+	Inputs         int64  `json:"inputs,omitempty"`
+	Hits           int64  `json:"hits,omitempty"`
+	Misses         int64  `json:"misses,omitempty"`
+	UpstreamInputs int64  `json:"upstream_inputs,omitempty"`
+}
+
 type ResponseHeaderDerived struct {
 	MetadataJSON     string
 	QuotaRecoverAtMS int64
@@ -136,14 +145,15 @@ func ParseResponseHeaderMetadata(raw any, base time.Time) *ResponseHeaderMetadat
 	}
 
 	metadata := &ResponseHeaderMetadata{
-		Quota:      parseQuotaHeaders(headers, base),
-		Errors:     parseErrorHeaders(headers, base),
-		Trace:      parseTraceHeaders(headers),
-		Routing:    parseRoutingHeaders(headers),
-		Response:   parseResponseShapeHeaders(headers),
-		Providers:  parseProviderHeaders(headers),
-		RateLimit:  parseRateLimitHeaders(headers),
-		DataPolicy: parseDataPolicyHeaders(headers),
+		Quota:          parseQuotaHeaders(headers, base),
+		Errors:         parseErrorHeaders(headers, base),
+		Trace:          parseTraceHeaders(headers),
+		Routing:        parseRoutingHeaders(headers),
+		Response:       parseResponseShapeHeaders(headers),
+		Providers:      parseProviderHeaders(headers),
+		RateLimit:      parseRateLimitHeaders(headers),
+		DataPolicy:     parseDataPolicyHeaders(headers),
+		EmbeddingCache: parseEmbeddingCacheHeaders(headers),
 	}
 	if metadata.isEmpty() {
 		return nil
@@ -459,6 +469,29 @@ func sanitizeResponseHeaderMetadata(metadata *ResponseHeaderMetadata) {
 			metadata.ProviderUsage = nil
 		}
 	}
+	if metadata.EmbeddingCache != nil {
+		metadata.EmbeddingCache.Status = strings.ToLower(normalizeHeaderValue(metadata.EmbeddingCache.Status))
+		switch metadata.EmbeddingCache.Status {
+		case "hit", "partial", "miss":
+		default:
+			metadata.EmbeddingCache.Status = ""
+		}
+		if metadata.EmbeddingCache.Inputs < 0 {
+			metadata.EmbeddingCache.Inputs = 0
+		}
+		if metadata.EmbeddingCache.Hits < 0 {
+			metadata.EmbeddingCache.Hits = 0
+		}
+		if metadata.EmbeddingCache.Misses < 0 {
+			metadata.EmbeddingCache.Misses = 0
+		}
+		if metadata.EmbeddingCache.UpstreamInputs < 0 {
+			metadata.EmbeddingCache.UpstreamInputs = 0
+		}
+		if metadata.EmbeddingCache.isEmpty() {
+			metadata.EmbeddingCache = nil
+		}
+	}
 }
 
 func (m *ResponseHeaderMetadata) isEmpty() bool {
@@ -471,7 +504,8 @@ func (m *ResponseHeaderMetadata) isEmpty() bool {
 			m.Providers == nil &&
 			m.RateLimit == nil &&
 			m.DataPolicy == nil &&
-			m.ProviderUsage == nil)
+			m.ProviderUsage == nil &&
+			m.EmbeddingCache == nil)
 }
 
 func sanitizeRateLimitBucket(bucket *HeaderRateLimitBucket) {
@@ -582,7 +616,12 @@ func isResponseHeaderAllowed(key string) bool {
 		"x-ratelimit-remaining-tokens",
 		"x-data-retention",
 		"x-zero-data-retention",
-		"x-zero-retention":
+		"x-zero-retention",
+		"x-cpa-embedding-cache",
+		"x-cpa-embedding-inputs",
+		"x-cpa-embedding-cache-hits",
+		"x-cpa-embedding-cache-misses",
+		"x-cpa-embedding-upstream-inputs":
 		return true
 	default:
 		return false
@@ -862,6 +901,28 @@ func parseDataPolicyHeaders(headers map[string][]string) *HeaderDataPolicyMetada
 			metadata.ZeroRetention = boolPointer(value)
 			break
 		}
+	}
+	if metadata.isEmpty() {
+		return nil
+	}
+	return metadata
+}
+
+func parseEmbeddingCacheHeaders(headers map[string][]string) *HeaderEmbeddingCacheMetadata {
+	metadata := &HeaderEmbeddingCacheMetadata{
+		Status: strings.ToLower(normalizeHeaderValue(headerFirst(headers, "x-cpa-embedding-cache"))),
+	}
+	if value, ok := parseIntHeader(headerFirst(headers, "x-cpa-embedding-inputs")); ok && value >= 0 {
+		metadata.Inputs = value
+	}
+	if value, ok := parseIntHeader(headerFirst(headers, "x-cpa-embedding-cache-hits")); ok && value >= 0 {
+		metadata.Hits = value
+	}
+	if value, ok := parseIntHeader(headerFirst(headers, "x-cpa-embedding-cache-misses")); ok && value >= 0 {
+		metadata.Misses = value
+	}
+	if value, ok := parseIntHeader(headerFirst(headers, "x-cpa-embedding-upstream-inputs")); ok && value >= 0 {
+		metadata.UpstreamInputs = value
 	}
 	if metadata.isEmpty() {
 		return nil
@@ -1319,4 +1380,13 @@ func (m *HeaderRateLimitMetadata) isEmpty() bool {
 
 func (m *HeaderDataPolicyMetadata) isEmpty() bool {
 	return m == nil || (m.RetentionMode == "" && m.ZeroRetention == nil)
+}
+
+func (m *HeaderEmbeddingCacheMetadata) isEmpty() bool {
+	return m == nil ||
+		(m.Status == "" &&
+			m.Inputs == 0 &&
+			m.Hits == 0 &&
+			m.Misses == 0 &&
+			m.UpstreamInputs == 0)
 }

@@ -382,6 +382,34 @@ func TestParseResponseHeaderMetadataIgnoresFutureHeaderCandidates(t *testing.T) 
 	}
 }
 
+func TestParseResponseHeaderMetadataEmbeddingCache(t *testing.T) {
+	metadata := ParseResponseHeaderMetadata(map[string]any{
+		"X-CPA-Embedding-Cache":           []any{"partial"},
+		"X-CPA-Embedding-Inputs":          []any{"32"},
+		"X-CPA-Embedding-Cache-Hits":      []any{"20"},
+		"X-CPA-Embedding-Cache-Misses":    []any{"12"},
+		"X-CPA-Embedding-Upstream-Inputs": []any{"10"},
+	}, time.Now())
+	if metadata == nil || metadata.EmbeddingCache == nil {
+		t.Fatal("embedding cache metadata was not parsed")
+	}
+	if got := metadata.EmbeddingCache.Status; got != "partial" {
+		t.Fatalf("status = %q, want partial", got)
+	}
+	if got := metadata.EmbeddingCache.Inputs; got != 32 {
+		t.Fatalf("inputs = %d, want 32", got)
+	}
+	if got := metadata.EmbeddingCache.Hits; got != 20 {
+		t.Fatalf("hits = %d, want 20", got)
+	}
+	if got := metadata.EmbeddingCache.Misses; got != 12 {
+		t.Fatalf("misses = %d, want 12", got)
+	}
+	if got := metadata.EmbeddingCache.UpstreamInputs; got != 10 {
+		t.Fatalf("upstream inputs = %d, want 10", got)
+	}
+}
+
 func TestResponseHeaderMetadataFromRecordSanitizesImportedMetadata(t *testing.T) {
 	metadata := ResponseHeaderMetadataFromRecord(map[string]any{
 		"response_metadata": map[string]any{

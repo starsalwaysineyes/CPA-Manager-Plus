@@ -66,6 +66,10 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'monitoring.provider_rate_limit_tokens': 'Tokens',
     'monitoring.provider_data_policy': 'Data policy',
     'monitoring.provider_zero_retention': 'Zero retention',
+    'monitoring.embedding_cache': 'Embedding cache',
+    'monitoring.embedding_cache_hits': 'hits',
+    'monitoring.embedding_cache_misses': 'misses',
+    'monitoring.embedding_cache_upstream': 'upstream',
     'monitoring.service_tier_short': 'Tier',
     'monitoring.request_service_tier_short': 'Requested tier',
     'monitoring.response_service_tier_short': 'Reported tier',
@@ -327,6 +331,26 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).toContain('API rate limit');
     expect(markup).toContain('Data policy');
     expect(markup).toContain('Zero retention');
+  });
+
+  it('renders embedding cache activity', () => {
+    const markup = renderPanel(
+      baseRow({
+        model: 'Qwen/Qwen3-Embedding-8B',
+        responseMetadata: {
+          embedding_cache: {
+            status: 'partial',
+            inputs: 32,
+            hits: 20,
+            misses: 12,
+            upstream_inputs: 10,
+          },
+        },
+      })
+    );
+
+    expect(markup).toContain('Embedding cache: partial · 20/32 · ↑10');
+    expect(markup).toContain('Embedding cache (partial): hits 20 / 32 · misses 12 · upstream 10');
   });
 
   it('renders safe response diagnostics on a successful request', () => {
