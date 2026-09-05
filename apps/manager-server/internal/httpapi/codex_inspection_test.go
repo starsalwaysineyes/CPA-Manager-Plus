@@ -167,20 +167,21 @@ func TestCodexInspectionManualActionsRoute(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
-			_, _ = w.Write([]byte(`{"files":[{"name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","disabled":true,"status":"ok","state":"ready"}]}`))
+			_, _ = w.Write([]byte(`{"files":[{"id":"runtime-auth-1","name":"auth-a.json","auth_index":"auth-1","provider":"codex","account":"alice@example.com","disabled":true,"status":"ok","state":"ready"}]}`))
 		case r.URL.Path == "/v0/management/api-call" && r.Method == http.MethodPost:
 			_, _ = w.Write([]byte(`{"status_code":200,"body":{"rate_limit":{"primary_window":{"used_percent":10,"limit_window_seconds":18000},"secondary_window":{"used_percent":5,"limit_window_seconds":2592000}}}}`))
 		case r.URL.Path == "/v0/management/auth-files/status" && r.Method == http.MethodPatch:
 			patchCalled = true
 			var payload struct {
-				Name     string `json:"name"`
-				Disabled bool   `json:"disabled"`
+				Name      string `json:"name"`
+				AuthIndex string `json:"auth_index"`
+				Disabled  bool   `json:"disabled"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Fatalf("decode patch payload: %v", err)
 			}
-			if payload.Name != "auth-a.json" || payload.Disabled {
-				t.Fatalf("patch payload = %#v, want enable auth-a.json", payload)
+			if payload.Name != "runtime-auth-1" || payload.AuthIndex != "auth-1" || payload.Disabled {
+				t.Fatalf("patch payload = %#v, want enable runtime-auth-1", payload)
 			}
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		default:
@@ -238,15 +239,23 @@ func TestCodexInspectionManualActionsRoute(t *testing.T) {
 	testutil.RequireStatus(t, completedCancelRR, http.StatusConflict)
 
 	actionBody := `{"resultIds":[` + strconv.FormatInt(runDetail.Results[0].ID, 10) + `]}`
-	actionRR := testutil.Request(
-		t,
-		handler,
-		http.MethodPost,
-		"/v0/management/codex-inspection/runs/"+strconv.FormatInt(runDetail.Run.ID, 10)+"/actions",
-		actionBody,
-		testutil.AdminKey,
-	)
-	testutil.RequireStatus(t, actionRR, http.StatusOK)
+	actionPath := "/v0/management/codex-inspection/runs/" + strconv.FormatInt(runDetail.Run.ID, 10) + "/actions"
+	deadline = time.Now().Add(2 * time.Second)
+	var actionRR *httptest.ResponseRecorder
+	for {
+		actionRR = testutil.Request(t, handler, http.MethodPost, actionPath, actionBody, testutil.AdminKey)
+		if actionRR.Code == http.StatusOK {
+			break
+		}
+		if actionRR.Code != http.StatusConflict ||
+			!strings.Contains(actionRR.Body.String(), "codex inspection is already running") {
+			testutil.RequireStatus(t, actionRR, http.StatusOK)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("manual actions remained blocked after completed run: %s", actionRR.Body.String())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if !patchCalled {
 		t.Fatal("manual actions route did not patch auth file")
 	}

@@ -14,7 +14,7 @@ vi.mock('./client', () => ({
   },
 }));
 
-import { providersApi } from './providers';
+import { providersApi, verifyClaudeFingerprintInRawConfig } from './providers';
 
 beforeEach(() => {
   mocks.get.mockReset();
@@ -22,6 +22,91 @@ beforeEach(() => {
 });
 
 describe('providersApi auth-index preservation', () => {
+  it('normalizes credential weights without collapsing explicit zero into omission', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'codex-api-key': [
+        { 'api-key': 'absent', 'base-url': 'https://example.com/absent' },
+        { 'api-key': 'zero', 'base-url': 'https://example.com/zero', weight: 0 },
+        { 'api-key': 'excluded', 'base-url': 'https://example.com/excluded', weight: -2 },
+        { 'api-key': 'positive', 'base-url': 'https://example.com/positive', weight: 5 },
+        { 'api-key': 'fraction', 'base-url': 'https://example.com/fraction', weight: 1.5 },
+        { 'api-key': 'too-large', 'base-url': 'https://example.com/large', weight: 1_000_001 },
+      ],
+    });
+
+    await expect(providersApi.getCodexConfigs()).resolves.toEqual([
+      expect.not.objectContaining({ weight: expect.anything() }),
+      expect.objectContaining({ apiKey: 'zero', weight: 0 }),
+      expect.objectContaining({ apiKey: 'excluded', weight: -2 }),
+      expect.objectContaining({ apiKey: 'positive', weight: 5 }),
+      expect.not.objectContaining({ weight: expect.anything() }),
+      expect.not.objectContaining({ weight: expect.anything() }),
+    ]);
+  });
+
+  it('serializes provider and OpenAI key weights while allowing an existing weight to be cleared', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'codex-api-key': [
+        { 'api-key': 'clear', 'base-url': 'https://example.com/clear', weight: 9 },
+        { 'api-key': 'zero', 'base-url': 'https://example.com/zero' },
+        { 'api-key': 'positive', 'base-url': 'https://example.com/positive' },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveCodexConfigs([
+      { apiKey: 'clear', baseUrl: 'https://example.com/clear' },
+      { apiKey: 'zero', baseUrl: 'https://example.com/zero', weight: 0 },
+      { apiKey: 'excluded', baseUrl: 'https://example.com/excluded', weight: -2 },
+      { apiKey: 'positive', baseUrl: 'https://example.com/positive', weight: 7 },
+    ]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/codex-api-key', [
+      { 'api-key': 'clear', 'base-url': 'https://example.com/clear' },
+      { 'api-key': 'zero', 'base-url': 'https://example.com/zero', weight: 0 },
+      { 'api-key': 'excluded', 'base-url': 'https://example.com/excluded', weight: -2 },
+      { 'api-key': 'positive', 'base-url': 'https://example.com/positive', weight: 7 },
+    ]);
+
+    mocks.get.mockResolvedValueOnce({
+      'openai-compatibility': [
+        {
+          name: 'weighted',
+          'base-url': 'https://openai.example/v1',
+          'api-key-entries': [
+            { 'api-key': 'clear', weight: 4 },
+            { 'api-key': 'zero' },
+            { 'api-key': 'positive' },
+          ],
+        },
+      ],
+    });
+
+    await providersApi.saveOpenAIProviders([
+      {
+        name: 'weighted',
+        baseUrl: 'https://openai.example/v1',
+        apiKeyEntries: [
+          { apiKey: 'clear' },
+          { apiKey: 'zero', weight: 0 },
+          { apiKey: 'positive', weight: 3 },
+        ],
+      },
+    ]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/openai-compatibility', [
+      {
+        name: 'weighted',
+        'base-url': 'https://openai.example/v1',
+        'api-key-entries': [
+          { 'api-key': 'clear' },
+          { 'api-key': 'zero', weight: 0 },
+          { 'api-key': 'positive', weight: 3 },
+        ],
+      },
+    ]);
+  });
+
   it('loads and creates xAI API key configs through the native management section', async () => {
     mocks.get.mockResolvedValueOnce({
       'xai-api-key': [
@@ -305,7 +390,7 @@ describe('providersApi v1.16 provider fields', () => {
     expect(mocks.get).toHaveBeenNthCalledWith(2, '/config');
   });
 
-  it('serializes Claude disable-cooling, cch signing, cloak cache, and model metadata', async () => {
+  it('serializes Claude disable-cooling, rebuild flag, cloak cache, and model metadata without legacy cch writes', async () => {
     mocks.get.mockResolvedValue({
       'claude-api-key': [
         {
@@ -343,7 +428,6 @@ describe('providersApi v1.16 provider fields', () => {
         'raw-field': 'keep',
         'auth-index': 'auth-4',
         'disable-cooling': true,
-        'experimental-cch-signing': true,
         'rebuild-mid-system-message': true,
         cloak: {
           'raw-cloak-field': 'keep-cloak',
@@ -360,6 +444,184 @@ describe('providersApi v1.16 provider fields', () => {
             thinking: { budget_tokens: 1024 },
           },
         ],
+      },
+    ]);
+  });
+
+  it('serializes Claude fingerprint-profile without creating legacy cch fields', async () => {
+    mocks.get.mockResolvedValue({ 'claude-api-key': [] });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.createClaudeConfig({
+      apiKey: 'key',
+      fingerprintProfile: 'claude-code-cli',
+    });
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/claude-api-key', [
+      { 'api-key': 'key', 'fingerprint-profile': 'claude-code-cli' },
+    ]);
+  });
+
+  it('omits fingerprint and legacy cch fields when a new Claude config uses the default profile', async () => {
+    mocks.get.mockResolvedValue({ 'claude-api-key': [] });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.createClaudeConfig({
+      apiKey: 'key',
+      fingerprintProfile: '',
+    });
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/claude-api-key', [{ 'api-key': 'key' }]);
+  });
+
+  it('preserves raw legacy cch signing when the fingerprint is untouched', async () => {
+    mocks.get.mockResolvedValue({
+      'claude-api-key': [
+        {
+          'api-key': 'claude-key',
+          'base-url': 'https://api.anthropic.com',
+          'experimental-cch-signing': true,
+          priority: 1,
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveClaudeConfigs([
+      { apiKey: 'claude-key', baseUrl: 'https://api.anthropic.com', priority: 10 },
+    ]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/claude-api-key', [
+      {
+        'api-key': 'claude-key',
+        'base-url': 'https://api.anthropic.com',
+        'experimental-cch-signing': true,
+        priority: 10,
+      },
+    ]);
+  });
+
+  it('keeps fingerprint and legacy cch when an update leaves the fingerprint untouched', async () => {
+    mocks.get.mockResolvedValue({
+      'claude-api-key': [
+        {
+          'api-key': 'claude-key',
+          'base-url': 'https://api.anthropic.com',
+          'fingerprint-profile': 'claude-code-cli',
+          'experimental-cch-signing': true,
+          priority: 1,
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.updateClaudeConfig(
+      {
+        apiKey: 'claude-key',
+        baseUrl: 'https://api.anthropic.com',
+        fingerprintProfile: 'claude-code-cli',
+        priority: 1,
+      },
+      {
+        apiKey: 'claude-key',
+        baseUrl: 'https://api.anthropic.com',
+        fingerprintProfile: 'claude-code-cli',
+        priority: 2,
+      }
+    );
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/claude-api-key', [
+      {
+        'api-key': 'claude-key',
+        'base-url': 'https://api.anthropic.com',
+        'fingerprint-profile': 'claude-code-cli',
+        'experimental-cch-signing': true,
+        priority: 2,
+      },
+    ]);
+  });
+
+  it('preserves raw legacy cch signing when the user explicitly enables the fingerprint profile', async () => {
+    mocks.get.mockResolvedValue({
+      'claude-api-key': [
+        {
+          'api-key': 'claude-key',
+          'base-url': 'https://api.anthropic.com',
+          'experimental-cch-signing': true,
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.updateClaudeConfig(
+      { apiKey: 'claude-key', baseUrl: 'https://api.anthropic.com' },
+      {
+        apiKey: 'claude-key',
+        baseUrl: 'https://api.anthropic.com',
+        fingerprintProfile: 'claude-code-cli',
+      }
+    );
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/claude-api-key', [
+      {
+        'api-key': 'claude-key',
+        'base-url': 'https://api.anthropic.com',
+        'fingerprint-profile': 'claude-code-cli',
+        'experimental-cch-signing': true,
+      },
+    ]);
+  });
+
+  it('removes fingerprint-profile and legacy cch when the user explicitly selects the default profile', async () => {
+    mocks.get.mockResolvedValue({
+      'claude-api-key': [
+        {
+          'api-key': 'claude-key',
+          'base-url': 'https://api.anthropic.com',
+          'fingerprint-profile': 'claude-code-cli',
+          'experimental-cch-signing': true,
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.updateClaudeConfig(
+      {
+        apiKey: 'claude-key',
+        baseUrl: 'https://api.anthropic.com',
+        fingerprintProfile: 'claude-code-cli',
+      },
+      { apiKey: 'claude-key', baseUrl: 'https://api.anthropic.com', fingerprintProfile: '' }
+    );
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/claude-api-key', [
+      { 'api-key': 'claude-key', 'base-url': 'https://api.anthropic.com' },
+    ]);
+  });
+
+  it('preserves unknown future fingerprint-profile values on unrelated edits', async () => {
+    mocks.get.mockResolvedValue({
+      'claude-api-key': [
+        {
+          'api-key': 'claude-key',
+          'base-url': 'https://api.anthropic.com',
+          'fingerprint-profile': 'claude-desktop',
+          weight: 1,
+        },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveClaudeConfigs([
+      { apiKey: 'claude-key', baseUrl: 'https://api.anthropic.com', weight: 2 },
+    ]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/claude-api-key', [
+      {
+        'api-key': 'claude-key',
+        'base-url': 'https://api.anthropic.com',
+        'fingerprint-profile': 'claude-desktop',
+        weight: 2,
       },
     ]);
   });
@@ -654,6 +916,55 @@ describe('providersApi v1.16 provider fields', () => {
     ]);
   });
 
+  it('preserves all four transport states and clears an existing override on inherit', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'gemini-api-key': [
+        { 'api-key': 'true', 'disable-cooling': true },
+        { 'api-key': 'false', 'disable-cooling': false },
+        { 'api-key': 'null', 'disable-cooling': null },
+        { 'api-key': 'absent' },
+      ],
+    });
+
+    await expect(providersApi.getGeminiKeys()).resolves.toEqual([
+      expect.objectContaining({ apiKey: 'true', disableCooling: true }),
+      expect.objectContaining({ apiKey: 'false', disableCooling: false }),
+      expect.objectContaining({ apiKey: 'null', disableCooling: null }),
+      expect.not.objectContaining({ disableCooling: expect.anything() }),
+    ]);
+
+    mocks.get.mockResolvedValueOnce({
+      'gemini-api-key': [{ 'api-key': 'old', disable_cooling: true, 'unknown-field': 'keep' }],
+    });
+    mocks.put.mockResolvedValue({});
+    await providersApi.saveGeminiKeys([{ apiKey: 'old', disableCooling: null }]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/gemini-api-key', [
+      {
+        'api-key': 'old',
+        'disable-cooling': null,
+        'unknown-field': 'keep',
+      },
+    ]);
+  });
+
+  it('serializes Vertex cooling overrides, including explicit false', async () => {
+    mocks.get.mockResolvedValueOnce({ 'vertex-api-key': [] });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.saveVertexConfigs([
+      { apiKey: 'vertex-key', baseUrl: 'https://vertex.example.com', disableCooling: false },
+    ]);
+
+    expect(mocks.put).toHaveBeenLastCalledWith('/vertex-api-key', [
+      {
+        'api-key': 'vertex-key',
+        'base-url': 'https://vertex.example.com',
+        'disable-cooling': false,
+      },
+    ]);
+  });
+
   it('preserves model metadata by index when model names change', async () => {
     mocks.get.mockResolvedValueOnce({
       'openai-compatibility': [
@@ -735,6 +1046,40 @@ describe('providersApi optimistic provider mutations', () => {
     ]);
   });
 
+  it('clears a Vertex cooling override through the update path without dropping raw fields', async () => {
+    mocks.get.mockResolvedValueOnce({
+      'vertex-api-key': [
+        {
+          'api-key': 'vertex-key',
+          'base-url': 'https://vertex.example.com',
+          disable_cooling: true,
+          'raw-field': 'keep',
+        },
+        { 'api-key': 'concurrent-key', priority: 9 },
+      ],
+    });
+    mocks.put.mockResolvedValue({});
+
+    await providersApi.updateVertexConfig(
+      { apiKey: 'vertex-key', baseUrl: 'https://vertex.example.com' },
+      {
+        apiKey: 'vertex-key',
+        baseUrl: 'https://vertex.example.com',
+        disableCooling: null,
+      }
+    );
+
+    expect(mocks.put).toHaveBeenCalledWith('/vertex-api-key', [
+      {
+        'api-key': 'vertex-key',
+        'base-url': 'https://vertex.example.com',
+        'disable-cooling': null,
+        'raw-field': 'keep',
+      },
+      { 'api-key': 'concurrent-key', priority: 9 },
+    ]);
+  });
+
   it('rejects an update when the original provider no longer exists', async () => {
     mocks.get.mockResolvedValueOnce({ 'interactions-api-key': [] });
 
@@ -768,5 +1113,145 @@ describe('providersApi optimistic provider mutations', () => {
       },
       { name: 'concurrent', 'base-url': 'https://other.example/v1' },
     ]);
+  });
+});
+
+describe('verifyClaudeFingerprintInRawConfig', () => {
+  const relayRecords = [
+    {
+      'api-key': 'same-key',
+      'base-url': 'https://relay.example',
+      'proxy-url': 'http://proxy-a',
+    },
+    {
+      'api-key': 'same-key',
+      'base-url': 'https://relay.example',
+      'proxy-url': 'http://proxy-b',
+      'fingerprint-profile': 'claude-code-cli',
+    },
+  ];
+
+  it('verifies a create against the appended record even with duplicate apiKey + baseUrl', () => {
+    expect(
+      verifyClaudeFingerprintInRawConfig(relayRecords, 'claude-code-cli', {
+        mode: 'create',
+        apiKey: 'same-key',
+        baseUrl: 'https://relay.example',
+      })
+    ).toBe('confirmed');
+  });
+
+  it('verifies a create against the appended record for header-only duplicates', () => {
+    const records = [
+      { 'base-url': 'https://relay.example', headers: { 'x-api-key': 'A' } },
+      {
+        'base-url': 'https://relay.example',
+        headers: { 'x-api-key': 'B' },
+        'fingerprint-profile': 'claude-code-cli',
+      },
+    ];
+    expect(
+      verifyClaudeFingerprintInRawConfig(records, 'claude-code-cli', {
+        mode: 'create',
+        baseUrl: 'https://relay.example',
+      })
+    ).toBe('confirmed');
+  });
+
+  it('reports not-found when the appended create record fails the identity sanity check', () => {
+    expect(
+      verifyClaudeFingerprintInRawConfig(
+        [{ 'api-key': 'other-key', 'base-url': 'https://relay.example' }],
+        'claude-code-cli',
+        { mode: 'create', apiKey: 'same-key', baseUrl: 'https://relay.example' }
+      )
+    ).toBe('not-found');
+  });
+
+  it('verifies an edit positionally and falls back to the new identity', () => {
+    expect(
+      verifyClaudeFingerprintInRawConfig(relayRecords, 'claude-code-cli', {
+        mode: 'edit',
+        index: 1,
+        apiKey: 'same-key',
+        baseUrl: 'https://relay.example',
+      })
+    ).toBe('confirmed');
+    expect(
+      verifyClaudeFingerprintInRawConfig(
+        [
+          ...relayRecords,
+          {
+            'api-key': 'moved-key',
+            'base-url': 'https://relay.example',
+            'fingerprint-profile': 'claude-code-cli',
+          },
+        ],
+        'claude-code-cli',
+        { mode: 'edit', index: 0, apiKey: 'moved-key', baseUrl: 'https://relay.example' }
+      )
+    ).toBe('confirmed');
+  });
+
+  it('only confirms an explicit Default when the raw field is really gone', () => {
+    expect(
+      verifyClaudeFingerprintInRawConfig(
+        [{ 'api-key': 'k', 'base-url': 'https://relay.example' }],
+        '',
+        { mode: 'edit', index: 0 }
+      )
+    ).toBe('confirmed');
+    expect(
+      verifyClaudeFingerprintInRawConfig(
+        [
+          {
+            'api-key': 'k',
+            'base-url': 'https://relay.example',
+            'fingerprint-profile': 'claude-desktop',
+          },
+        ],
+        '',
+        { mode: 'edit', index: 0 }
+      )
+    ).toBe('not-applied');
+  });
+
+  it('does not confirm a CLI request when the raw profile is missing or unknown', () => {
+    expect(
+      verifyClaudeFingerprintInRawConfig(
+        [{ 'api-key': 'k', 'base-url': 'https://relay.example' }],
+        'claude-code-cli',
+        { mode: 'edit', index: 0 }
+      )
+    ).toBe('not-applied');
+    expect(
+      verifyClaudeFingerprintInRawConfig(
+        [
+          {
+            'api-key': 'k',
+            'base-url': 'https://relay.example',
+            'fingerprint-profile': 'claude-desktop',
+          },
+        ],
+        'claude-code-cli',
+        { mode: 'edit', index: 0 }
+      )
+    ).toBe('not-applied');
+  });
+
+  it('accepts the canonical oauth-cli alias in the raw read-back', () => {
+    expect(
+      verifyClaudeFingerprintInRawConfig(
+        [
+          {
+            'api-key': 'k',
+            'base-url': 'https://relay.example',
+            'fingerprint-profile': 'oauth-cli',
+          },
+        ],
+        'claude-code-cli',
+        { mode: 'edit', index: 0 }
+      )
+    ).toBe('confirmed');
   });
 });

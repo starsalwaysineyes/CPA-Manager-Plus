@@ -1,11 +1,3 @@
-/**
- * Quota components barrel export.
- */
-
-export { QuotaSection } from './QuotaSection';
-export { QuotaCard } from './QuotaCard';
-export { QuotaInfoTooltip, resolveQuotaInfoTooltipPosition } from './QuotaInfoTooltip';
-export { useQuotaLoader } from './useQuotaLoader';
 export {
   ANTIGRAVITY_CONFIG,
   CLAUDE_CONFIG,
@@ -17,3 +9,9 @@ export {
   resolveQuotaDisplayState,
 } from './quotaConfigs';
 export type { QuotaConfig } from './quotaConfigs';
+export {
+  refreshQuotaWithConfig,
+  type QuotaRefreshResult,
+  type QuotaSetter,
+  type QuotaUpdater,
+} from './quotaRefresh';

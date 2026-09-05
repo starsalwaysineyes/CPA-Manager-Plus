@@ -42,6 +42,114 @@ const mountUseVisualConfig = (): UseVisualConfigHarness => {
 };
 
 describe('useVisualConfig', () => {
+  it('clears the page dirty state when API keys are the only changed field', () => {
+    const harness = mountUseVisualConfig();
+    const initialYaml = ['proxy-url: http://proxy.local:8080', 'api-keys:', '  - old-key', ''].join(
+      '\n'
+    );
+
+    act(() => {
+      expect(harness.getCurrent().loadVisualValuesFromYaml(initialYaml).ok).toBe(true);
+      harness.getCurrent().setVisualValues({ apiKeysText: 'old-key\nnew-key' });
+    });
+    expect(harness.getCurrent().visualDirty).toBe(true);
+
+    act(() => {
+      harness.getCurrent().commitApiKeysText('old-key\nnew-key');
+    });
+
+    expect(harness.getCurrent().visualDirty).toBe(false);
+    expect(harness.getCurrent().applyVisualChangesToYaml(initialYaml)).toBe(
+      initialYaml
+    );
+    harness.unmount();
+  });
+
+  it('applies ordinary Visual changes to latest YAML without overwriting an immediate API key', () => {
+    const harness = mountUseVisualConfig();
+    const initialYaml = ['proxy-url: http://proxy.local:8080', 'api-keys:', '  - old-key', ''].join(
+      '\n'
+    );
+    const latestYaml = [
+      'proxy-url: http://proxy.local:8080',
+      'api-keys:',
+      '  - old-key',
+      '  - new-key',
+      '',
+    ].join('\n');
+
+    act(() => {
+      expect(harness.getCurrent().loadVisualValuesFromYaml(initialYaml).ok).toBe(true);
+      harness.getCurrent().setVisualValues({ proxyUrl: 'http://next-proxy.local:8080' });
+      harness.getCurrent().commitApiKeysText('old-key\nnew-key');
+    });
+
+    const parsed = parseYaml(
+      harness.getCurrent().applyVisualChangesToYaml(latestYaml)
+    ) as { ['api-keys']?: string[]; ['proxy-url']?: string };
+    expect(parsed['proxy-url']).toBe('http://next-proxy.local:8080');
+    expect(parsed['api-keys']).toEqual(['old-key', 'new-key']);
+    expect(harness.getCurrent().visualDirty).toBe(true);
+    harness.unmount();
+  });
+
+  it('commits only API keys while preserving other visual dirty fields', () => {
+    const harness = mountUseVisualConfig();
+    const yaml = ['proxy-url: http://proxy.local:8080', 'api-keys:', '  - old-key', ''].join('\n');
+
+    act(() => {
+      expect(harness.getCurrent().loadVisualValuesFromYaml(yaml).ok).toBe(true);
+      harness.getCurrent().setVisualValues({
+        proxyUrl: 'http://next-proxy.local:8080',
+        apiKeysText: 'old-key\nnew-key',
+      });
+    });
+
+    expect(harness.getCurrent().visualDirty).toBe(true);
+
+    act(() => {
+      harness.getCurrent().commitApiKeysText('old-key\nnew-key');
+    });
+
+    expect(harness.getCurrent().visualValues.apiKeysText).toBe('old-key\nnew-key');
+    expect(harness.getCurrent().visualValues.proxyUrl).toBe('http://next-proxy.local:8080');
+    expect(harness.getCurrent().visualDirty).toBe(true);
+
+    act(() => {
+      harness.getCurrent().setVisualValues({ proxyUrl: 'http://proxy.local:8080' });
+    });
+
+    expect(harness.getCurrent().visualDirty).toBe(false);
+    harness.unmount();
+  });
+
+  it('loads CPA weighted routing aliases and writes the canonical strategy', () => {
+    const harness = mountUseVisualConfig();
+    const yaml = ['routing:', '  strategy: wrr', ''].join('\n');
+
+    act(() => {
+      expect(harness.getCurrent().loadVisualValuesFromYaml(yaml).ok).toBe(true);
+    });
+    expect(harness.getCurrent().visualValues.routingStrategy).toBe('weighted-round-robin');
+    harness.unmount();
+
+    const writeHarness = mountUseVisualConfig();
+    const roundRobinYaml = ['routing:', '  strategy: round-robin', ''].join('\n');
+
+    act(() => {
+      expect(writeHarness.getCurrent().loadVisualValuesFromYaml(roundRobinYaml).ok).toBe(true);
+      writeHarness.getCurrent().setVisualValues({ routingStrategy: 'weighted-round-robin' });
+    });
+
+    const parsed = parseYaml(
+      writeHarness.getCurrent().applyVisualChangesToYaml(roundRobinYaml)
+    ) as {
+      routing?: { strategy?: string };
+    };
+    expect(parsed.routing?.strategy).toBe('weighted-round-robin');
+    writeHarness.unmount();
+  });
+
   it('loads plugin system state from plugins.enabled', () => {
     const harness = mountUseVisualConfig();
     const yaml = ['plugins:', '  enabled: true', ''].join('\n');
@@ -133,6 +241,30 @@ describe('useVisualConfig', () => {
     const savedYaml = harness.getCurrent().applyVisualChangesToYaml(yaml);
     expect(savedYaml).toContain('plugins:');
     expect(savedYaml).toContain('enabled: true');
+
+    harness.unmount();
+  });
+
+  it('loads and writes request logging through the visual config editor', () => {
+    const harness = mountUseVisualConfig();
+    const yaml = ['request-log: true', 'logging-to-file: false', ''].join('\n');
+
+    act(() => {
+      const result = harness.getCurrent().loadVisualValuesFromYaml(yaml);
+      expect(result.ok).toBe(true);
+    });
+    expect(harness.getCurrent().visualValues.requestLog).toBe(true);
+
+    act(() => {
+      harness.getCurrent().setVisualValues({ requestLog: false });
+    });
+
+    const parsed = parseYaml(harness.getCurrent().applyVisualChangesToYaml(yaml)) as Record<
+      string,
+      unknown
+    >;
+    expect(parsed['request-log']).toBe(false);
+    expect(parsed['logging-to-file']).toBe(false);
 
     harness.unmount();
   });

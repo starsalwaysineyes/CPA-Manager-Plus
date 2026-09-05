@@ -23,6 +23,7 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'monitoring.column_output_tps': 'TPS',
     'monitoring.column_source_api_key': 'Source / API Key',
     'monitoring.column_success_rate': 'Success',
+    'monitoring.column_success_rate_short': 'Success Rate',
     'monitoring.column_time': 'Time',
     'monitoring.column_type': 'Type',
     'monitoring.elapsed_short': 'Elapsed',
@@ -32,19 +33,32 @@ const t = ((key: string, options?: Record<string, unknown>) => {
     'monitoring.filter_account': 'Account',
     'monitoring.filter_status_failed': 'Failed only',
     'monitoring.filter_provider': 'Provider',
+    'monitoring.client_ip': 'Client IP',
+    'monitoring.x_forwarded_for_unverified': 'Forwarded chain (unverified)',
+    'monitoring.user_agent': 'User-Agent',
+    'monitoring.request_metadata': 'Request metadata',
     'monitoring.cached_tokens': 'Cached Tokens',
     'monitoring.cache_read_tokens': 'Cache Read Tokens',
     'monitoring.cache_creation_tokens': 'Cache Creation Tokens',
+    'monitoring.realtime_usage_total_label': 'Total',
+    'monitoring.realtime_usage_input_label': 'Input',
+    'monitoring.realtime_usage_output_label': 'Output',
+    'monitoring.realtime_usage_reasoning_label': 'Reasoning',
+    'monitoring.realtime_usage_cached_label': 'Cached',
+    'monitoring.realtime_usage_cache_read_label': 'Cache Read',
+    'monitoring.realtime_usage_cache_creation_label': 'Cache Creation',
     'monitoring.load_more_events': 'Load more',
     'monitoring.log_rows': 'Rows',
     'monitoring.no_more_events': 'No more events',
     'monitoring.events_loaded_summary': 'Loaded {{loaded}} of {{total}} events',
     'monitoring.events_all_loaded': 'All {{total}} events loaded',
     'monitoring.events_retention_limited': 'Kept the newest {{loaded}} of {{total}} events',
-    'monitoring.reasoning_effort': 'Effort',
-    'monitoring.reasoning_effort_short': 'Effort',
+    'monitoring.reasoning_service_short': 'Reasoning / Tier',
+    'monitoring.realtime_reasoning_label': 'Reasoning',
+    'monitoring.realtime_service_label': 'Service',
     'monitoring.recent_failures': 'Failures',
     'monitoring.recent_status': 'Recent',
+    'monitoring.recent_status_short': 'Recent Status',
     'monitoring.realtime_api_key_hash': 'API Key hash',
     'monitoring.realtime_api_key_label': 'API Key',
     'monitoring.realtime_api_key_masked': 'Masked key',
@@ -102,6 +116,7 @@ type PanelOverrides = {
   eventsRetentionLimited?: boolean;
   eventsTotalCount?: number;
   eventsLoadedCount?: number;
+  hasPrices?: boolean;
 };
 
 const baseRow = (overrides: Partial<PanelRow> = {}): PanelRow => ({
@@ -136,7 +151,7 @@ const baseRow = (overrides: Partial<PanelRow> = {}): PanelRow => ({
   statsIncluded: true,
   latencyMs: 1500,
   ttftMs: 500,
-  tokensPerSecond: 20,
+  tokensPerSecond: 13.3,
   inputTokens: 10,
   outputTokens: 20,
   reasoningTokens: 3,
@@ -178,7 +193,7 @@ const renderPanel = (row: PanelRow, overrides: PanelOverrides = {}) =>
       eventsTotalCount={overrides.eventsTotalCount ?? 1}
       eventsLoadedCount={overrides.eventsLoadedCount ?? 1}
       overallLoading={false}
-      hasPrices={false}
+      hasPrices={overrides.hasPrices ?? false}
       accountDisplayMode={overrides.accountDisplayMode ?? 'masked'}
       locale="en-US"
       emptyState={<span>empty</span>}
@@ -221,26 +236,50 @@ describe('RealtimeEventsPanel', () => {
       })
     );
 
-    expect(markup).toContain('<th>Effort</th>');
+    expect(markup).toContain(`class="${styles.realtimeSettingsColumn}">Reasoning / Tier</th>`);
     expect(markup).toContain('>TPS</th>');
+    expect(markup).toContain(styles.realtimeTpsColumn);
+    expect(markup).toContain(styles.realtimeLatencyColumn);
+    expect(markup).toContain(styles.realtimeTimeColumn);
+    expect(markup.match(new RegExp(styles.realtimeCenteredColumn, 'g'))).toHaveLength(8);
+    expect(markup.match(new RegExp(styles.realtimeSettingsColumn, 'g'))).toHaveLength(2);
+    expect(markup).toContain('>Recent Status</th>');
+    expect(markup).toContain('>Success Rate</th>');
     expect(markup).toContain('Source / API Key');
     expect(markup).not.toContain('>Executor: codex<');
     expect(markup).toContain('Executor: codex');
-    expect(markup).toContain('medium');
-    expect(markup).toContain('Requested tier: priority');
-    expect(markup).toContain('Reported tier: default');
+    expect(markup).toContain('>Reasoning</span><span class=');
+    expect(markup).toContain('>medium</span>');
+    expect(markup).toContain('>Service</span><span class=');
+    expect(markup).toContain('>priority</span>');
+    expect(markup).not.toContain('default</span>');
+    expect(markup).toContain(styles.realtimeReasoningValue);
+    expect(markup).toContain(styles.realtimeServiceValue);
     expect(markup).toContain('client-gpt');
     expect(markup).toContain('gpt-5.4');
     expect(markup).not.toContain('Resolved');
     expect(markup).not.toContain('POST /v1/chat/completions');
     expect(markup).toContain('Failed');
-    expect(markup).toMatch(/TTFT<\/span><span class="[^"]+">｜<\/span><span class="[^"]+">Elapsed/);
+    expect(markup).toContain('>Elapsed</th>');
+    expect(markup).toContain('>TTFT</span><span class=');
     expect(markup).toContain('500 ms');
     expect(markup).toContain('Elapsed');
     expect(markup).toContain('1.5 s');
-    expect(markup).toContain('20');
-    expect(markup).toContain('I 10 · O 20 · R 3');
-    expect(markup).toContain('C 5 · CR 4 · CW 1');
+    expect(markup).toContain('>13</span>');
+    expect(markup).not.toContain('>Gen</span>');
+    expect(markup).not.toContain('>E2E</span>');
+    expect(markup).toContain(styles.realtimeUsageCell);
+    expect(markup).toContain('>↑</span>10');
+    expect(markup).toContain('>↓</span>20');
+    expect(markup).toContain('>Total</span>');
+    expect(markup).toContain('>Input</span>');
+    expect(markup).toContain('>Output</span>');
+    expect(markup).toContain('>Reasoning</span>');
+    expect(markup).toContain('>Cached</span>');
+    expect(markup).toContain('>Cache Read</span>');
+    expect(markup).toContain('>Cache Creation</span>');
+    expect(markup).toContain(styles.realtimeUsageTooltip);
+    expect(markup).toContain(styles.realtimeUsageTooltipLeftBelow);
     expect(markup).toContain('role="tooltip"');
     expect(markup).toContain(styles.realtimeFailureTooltip);
     expect(markup).toContain(styles.realtimeFailureTooltipBelow);
@@ -353,7 +392,7 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).toContain('Embedding cache (partial): hits 20 / 32 · misses 12 · upstream 10');
   });
 
-  it('renders safe response diagnostics on a successful request', () => {
+  it('does not render diagnostics for a successful request', () => {
     const markup = renderPanel(
       baseRow({
         responseMetadata: {
@@ -367,11 +406,11 @@ describe('RealtimeEventsPanel', () => {
     );
 
     expect(markup).toContain('Success');
-    expect(markup).toContain('API rate limit');
-    expect(markup).toContain('Requests 20 / 21');
-    expect(markup).toContain('Tokens 999000 / 1000000');
-    expect(markup).toContain('Zero retention: No');
-    expect(markup).toContain(styles.realtimeSuccessDiagnosticTooltip);
+    expect(markup).not.toContain('API rate limit');
+    expect(markup).not.toContain('Requests 20 / 21');
+    expect(markup).not.toContain('Tokens 999000 / 1000000');
+    expect(markup).not.toContain('Zero retention: No');
+    expect(markup).not.toContain(styles.realtimeFailureTooltip);
   });
 
   it('renders safe defaults when optional usage fields are missing', () => {
@@ -379,22 +418,31 @@ describe('RealtimeEventsPanel', () => {
 
     expect(markup).toContain('<colgroup>');
     expect(markup.match(/<col\b/g)).toHaveLength(12);
-    expect(markup).not.toContain('Effort -');
-    expect(markup).toContain('<th>Effort</th>');
+    expect(
+      markup.match(new RegExp(`class="[^"]*${styles.realtimeSettingValue}[^"]*">-</span>`, 'g'))
+    ).toHaveLength(2);
+    expect(markup).toContain(`class="${styles.realtimeSettingsColumn}">Reasoning / Tier</th>`);
     expect(markup).toContain('>TPS</th>');
     expect(markup).toContain('Success');
-    expect(markup).toMatch(/TTFT<\/span><span class="[^"]+">｜<\/span><span class="[^"]+">Elapsed/);
+    expect(markup).toContain('>Elapsed</th>');
+    expect(markup).toContain('>TTFT</span><span class=');
     expect(markup).toContain(expectedDate);
     expect(markup).toContain(expectedTime);
-    expect(markup).toContain('I 10 · O 20');
-    expect(markup).toContain('C 5');
-    expect(markup).not.toContain('R 0');
-    expect(markup).not.toContain('CR 0');
-    expect(markup).not.toContain('CW 0');
-    expect(markup).not.toContain('role="tooltip"');
-    expect(markup).not.toContain('aria-describedby=');
+    expect(markup).toContain('>↑</span>10');
+    expect(markup).toContain('>↓</span>20');
+    expect(markup).toContain('>Reasoning</span><span class=');
+    expect(markup).toContain('>0</span>');
+    expect(markup).toContain(styles.realtimeUsageTooltip);
+    expect(markup).toContain('role="tooltip"');
+    expect(markup).toContain('aria-describedby=');
     expect(markup).toContain('Transport: HTTP');
     expect(markup).toContain('>HTTP</small>');
+  });
+
+  it('keeps realtime request estimated cost at three decimal places', () => {
+    const markup = renderPanel(baseRow({ totalCost: 0.1264 }), { hasPrices: true });
+
+    expect(markup).toContain('$0.126');
   });
 
   it('renders API key alias inside the source cell without adding another column', () => {
@@ -412,6 +460,7 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).not.toContain('#12345678');
     expect(markup).toContain('API Key hash: 1234567890abcdef');
     expect(markup).toContain('Masked key: sk-...cdef');
+    expect(markup).toMatch(/class="[^"]*realtimeApiKeyLine[^"]*" title=/);
     expect(markup).toContain('Executor: codex');
     expect(markup).not.toContain('>Executor: codex<');
   });
@@ -425,6 +474,37 @@ describe('RealtimeEventsPanel', () => {
     expect(markup).toContain(longModel);
     expect(markup).toMatch(/class="[^"]*realtimeModelCell[^"]*"/);
     expect(markup).toMatch(/class="[^"]*realtimeModelText[^"]*"/);
+  });
+
+  it('renders the requested model first and the upstream resolved model second', () => {
+    const markup = renderPanel(
+      baseRow({
+        model: 'deepseek-v4-flash',
+        requestedModel: 'deepseek-v4-flash(max)',
+        resolvedModel: 'resolved-deepseek-v4-flash',
+      })
+    );
+
+    expect(markup).toContain('title="deepseek-v4-flash(max)\nresolved-deepseek-v4-flash"');
+    expect(markup.indexOf('>deepseek-v4-flash(max)</span>')).toBeLessThan(
+      markup.indexOf('>resolved-deepseek-v4-flash</small>')
+    );
+    expect(markup).not.toContain('>deepseek-v4-flash</span>');
+  });
+
+  it('does not duplicate an unchanged requested and resolved model', () => {
+    const model = 'deepseek-chat(region-us)';
+    const markup = renderPanel(
+      baseRow({
+        model,
+        requestedModel: model,
+        resolvedModel: model,
+      })
+    );
+
+    expect(markup).toContain(`title="${model}"`);
+    expect(markup).toContain(`>${model}</span>`);
+    expect(markup).not.toContain(`>${model}</small>`);
   });
 
   it('switches realtime source labels between masked and full display', () => {
@@ -469,16 +549,38 @@ describe('RealtimeEventsPanel', () => {
     expect(fullMarkup).not.toContain('<small>Account: visible-user@example.com</small>');
   });
 
+  it('exposes request metadata through a keyboard-expandable disclosure only in full mode', () => {
+    const row = baseRow({
+      clientIp: '192.0.2.10',
+      xForwardedFor: '203.0.113.5, 198.51.100.8',
+      userAgent: 'test-client/1.0',
+    });
+    const maskedMarkup = renderPanel(row);
+    const fullMarkup = renderPanel(row, { accountDisplayMode: 'full' });
+
+    for (const value of ['192.0.2.10', '203.0.113.5', 'test-client/1.0']) {
+      expect(maskedMarkup).not.toContain(value);
+      expect(fullMarkup).toContain(value);
+    }
+    expect(maskedMarkup).not.toContain('Request metadata');
+    expect(fullMarkup).toContain(`<details class="${styles.realtimeRequestMetadata}">`);
+    expect(fullMarkup).toContain('<summary>Request metadata</summary>');
+    expect(fullMarkup).toContain('Client IP: 192.0.2.10');
+    expect(fullMarkup).toContain('Forwarded chain (unverified): 203.0.113.5, 198.51.100.8');
+    expect(fullMarkup).toContain('User-Agent: test-client/1.0');
+  });
+
   it('renders a ttft placeholder when ttft is missing', () => {
     const markup = renderPanel(baseRow({ ttftMs: null }));
 
     expect(markup).toContain('>TPS</th>');
-    expect(markup).toMatch(/TTFT<\/span><span class="[^"]+">｜<\/span><span class="[^"]+">Elapsed/);
+    expect(markup).toContain('>Elapsed</th>');
     expect(markup).not.toContain('500 ms');
     expect(markup).toContain('1.5 s');
-    expect(markup).toMatch(
-      /--<\/span><span class="[^"]+">｜<\/span><span class="[^"]*realtimeMetricText[^"]*realtimeMetricRight[^"]*">1\.5 s<\/span>/
-    );
+    expect(markup).toContain('>TTFT</span><span class=');
+    expect(markup).toContain('>--</span>');
+    expect(markup).toContain('>Elapsed</span><span class=');
+    expect(markup).toContain('>1.5 s</span>');
   });
 
   it('keeps latency warning and error tone classes on plain text metrics', () => {
@@ -492,15 +594,11 @@ describe('RealtimeEventsPanel', () => {
   it('colors normal millisecond and second metrics green for both ttft and elapsed time', () => {
     const markup = renderPanel(baseRow({ latencyMs: 470, ttftMs: 120 }));
 
-    expect(markup).toMatch(
-      /class="[^"]*realtimeMetricText[^"]*realtimeMetricLeft[^"]*goodText[^"]*">120 ms/
-    );
-    expect(markup).toMatch(
-      /class="[^"]*realtimeMetricText[^"]*realtimeMetricRight[^"]*goodText[^"]*">470 ms/
-    );
+    expect(markup).toMatch(/class="[^"]*realtimeMetricText[^"]*goodText[^"]*">120 ms/);
+    expect(markup).toMatch(/class="[^"]*realtimeMetricText[^"]*goodText[^"]*">470 ms/);
   });
 
-  it('renders residual cached tokens even when they equal cache read tokens', () => {
+  it('renders each cache detail in the token usage tooltip', () => {
     const markup = renderPanel(
       baseRow({
         cachedTokens: 4,
@@ -509,12 +607,14 @@ describe('RealtimeEventsPanel', () => {
       })
     );
 
-    expect(markup).toContain('C 4');
-    expect(markup).toContain('CR 4');
-    expect(markup).toContain('CW 1');
+    expect(markup).toContain('>Cached</span><span class=');
+    expect(markup).toContain('>Cache Read</span><span class=');
+    expect(markup).toContain('>Cache Creation</span><span class=');
+    expect(markup).toContain('>4</span>');
+    expect(markup).toContain('>1</span>');
   });
 
-  it('hides zero legacy cache while showing GPT-5.6 cache read and write metrics', () => {
+  it('shows zero legacy cache alongside GPT-5.6 cache read and write metrics', () => {
     const markup = renderPanel(
       baseRow({
         model: 'gpt-5.6-sol',
@@ -525,9 +625,14 @@ describe('RealtimeEventsPanel', () => {
       })
     );
 
-    expect(markup).not.toContain('C 0');
-    expect(markup).toContain('CR 151.0K · CW 1.0K');
-    expect(markup).toContain('aria-label="Cache Read Tokens: 151.0K, Cache Creation Tokens: 1.0K"');
+    expect(markup).toContain('>Cached</span><span class=');
+    expect(markup).toContain('>Cache Read</span><span class=');
+    expect(markup).toContain('>Cache Creation</span><span class=');
+    expect(markup).toContain('>151.0K</span>');
+    expect(markup).toContain('>1.0K</span>');
+    expect(markup).toContain(
+      'aria-label="Total: 33, Input: 152.6K, Output: 20, Reasoning: 3, Cached: 0, Cache Read: 151.0K, Cache Creation: 1.0K"'
+    );
     expect(markup).toContain('tabindex="0"');
   });
 

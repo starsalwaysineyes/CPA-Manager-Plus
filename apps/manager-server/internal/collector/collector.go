@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/config"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/httpqueue"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/resp"
+	quotasnapshotsvc "github.com/seakee/cpa-manager-plus/apps/manager-server/internal/service/quotasnapshot"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/store"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
 )
@@ -53,6 +55,7 @@ type Manager struct {
 	base              config.Config
 	store             *store.Store
 	snapshotResolver  *authSnapshotResolver
+	quotaSnapshots    *quotasnapshotsvc.Service
 	usageEventHandler UsageEventHandler
 	mu                sync.Mutex
 	cancel            context.CancelFunc
@@ -65,6 +68,7 @@ func NewManager(base config.Config, store *store.Store) *Manager {
 		base:             base,
 		store:            store,
 		snapshotResolver: newAuthSnapshotResolver(),
+		quotaSnapshots:   quotasnapshotsvc.New(store),
 		status: Status{
 			Collector: "stopped",
 			Mode:      collectorMode(base.CollectorMode),
@@ -432,7 +436,11 @@ func (m *Manager) processItems(ctx context.Context, cfg RuntimeConfig, items []s
 		return err
 	}
 	if result.Inserted > 0 {
-		m.handleUsageEvents(ctx, cfg, insertedEvents(events, result.InsertedEventHashes))
+		inserted := insertedEvents(events, result.InsertedEventHashes)
+		if err := m.quotaSnapshots.WriteUsageEvents(ctx, inserted); err != nil {
+			log.Printf("persist usage quota snapshots: %v", err)
+		}
+		m.handleUsageEvents(ctx, cfg, inserted)
 	}
 	if result.Inserted > 0 || result.Skipped > 0 {
 		m.setStatus(func(status *Status) {
@@ -541,6 +549,10 @@ func (m *Manager) enrichAccountSnapshots(ctx context.Context, cfg RuntimeConfig,
 			events[i].AuthProviderSnapshot = snapshot.Provider
 			updated = true
 		}
+		if events[i].AuthAccountIDSnapshot == "" && snapshot.AccountID != "" {
+			events[i].AuthAccountIDSnapshot = snapshot.AccountID
+			updated = true
+		}
 		if events[i].AuthProjectIDSnapshot == "" && snapshot.ProjectID != "" {
 			events[i].AuthProjectIDSnapshot = snapshot.ProjectID
 			updated = true
@@ -552,7 +564,13 @@ func (m *Manager) enrichAccountSnapshots(ctx context.Context, cfg RuntimeConfig,
 }
 
 func needsAccountSnapshotEnrichment(event usage.Event) bool {
+	provider := strings.TrimSpace(event.AuthProviderSnapshot)
+	if provider == "" {
+		provider = strings.TrimSpace(event.Provider)
+	}
+	isCodex := strings.EqualFold(provider, "codex")
 	return event.AccountSnapshot == "" ||
+		(isCodex && event.AuthAccountIDSnapshot == "") ||
 		event.AuthProjectIDSnapshot == ""
 }
 

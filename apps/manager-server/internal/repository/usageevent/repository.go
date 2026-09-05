@@ -8,10 +8,12 @@ import (
 
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/model"
 	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usage"
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 type Repository interface {
 	InsertBatch(ctx context.Context, events []model.UsageEvent) (model.InsertResult, error)
+	ResolveCodexLegacyAccountKey(ctx context.Context, fields usageidentity.Fields) (string, bool, error)
 	ListRecent(ctx context.Context, limit int) ([]model.UsageEvent, error)
 	ModelUsageSummary(ctx context.Context, limit int) (model.ModelUsageSummary, error)
 	BackfillResponseMetadata(ctx context.Context, batchLimit int) (int, error)
@@ -37,6 +39,8 @@ type Repository interface {
 	ChannelModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]ChannelModelStat, error)
 	FailureSourcesWithFilter(ctx context.Context, filter AnalyticsFilter) ([]FailureSourceStat, error)
 	AccountModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]AccountModelStat, error)
+	AccountWindowModelStats(ctx context.Context, windows []AccountWindowUsageQuery) ([]AccountWindowModelStat, error)
+	RecentAccountRequests(ctx context.Context, targets []LatestAccountRequestQuery, limit int) ([]LatestAccountRequest, error)
 	CredentialModelStatsWithFilter(ctx context.Context, filter AnalyticsFilter) ([]CredentialModelStat, error)
 	CredentialTimelineWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string, location *time.Location) ([]CredentialTimelinePoint, error)
 	APIKeyTimelineWithFilter(ctx context.Context, filter AnalyticsFilter, granularity string, location *time.Location) ([]APIKeyTimelinePoint, error)
@@ -109,15 +113,16 @@ func (r *repository) InsertBatch(ctx context.Context, events []model.UsageEvent)
 
 	stmt, err := tx.PrepareContext(ctx, `insert or ignore into usage_events (
 		request_id, event_hash, timestamp_ms, timestamp, provider, executor_type, model, endpoint, method, path,
+		client_ip, x_forwarded_for, user_agent,
 		auth_type, auth_index, source, source_hash, api_key_hash,
-		account_snapshot, auth_label_snapshot, auth_file_snapshot, auth_provider_snapshot, auth_project_id_snapshot, auth_snapshot_at_ms,
+		account_snapshot, auth_label_snapshot, auth_file_snapshot, auth_provider_snapshot, auth_account_id_snapshot, auth_project_id_snapshot, auth_snapshot_at_ms,
 		requested_model, resolved_model, reasoning_effort, service_tier, request_service_tier, response_service_tier, cache_input_mode,
 		input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_tokens, cache_read_tokens, cache_creation_tokens,
 		normalized_uncached_input_tokens, normalized_total_input_tokens, normalized_cache_read_tokens, normalized_cache_creation_tokens, total_tokens,
 		latency_ms, ttft_ms, failed, fail_status_code, fail_summary,
 		response_metadata_json, header_quota_recover_at_ms, header_quota_used_percent, header_quota_plan_type, header_error_kind, header_error_code, header_trace_id,
 		fail_body, raw_json, created_at_ms
-		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return model.InsertResult{}, err
 	}
@@ -147,6 +152,7 @@ func (r *repository) InsertBatch(ctx context.Context, events []model.UsageEvent)
 			continue
 		}
 
+		usage.NormalizeRequestMetadata(&event)
 		accounting := usage.NormalizeCacheAccounting(usage.CacheInputContext{
 			ExplicitMode:     event.CacheInputMode,
 			ExecutorType:     event.ExecutorType,
@@ -196,6 +202,9 @@ func (r *repository) InsertBatch(ctx context.Context, events []model.UsageEvent)
 			nullString(event.Endpoint),
 			nullString(event.Method),
 			nullString(event.Path),
+			nullString(event.ClientIP),
+			nullString(event.XForwardedFor),
+			nullString(event.UserAgent),
 			nullString(event.AuthType),
 			nullString(event.AuthIndex),
 			nullString(event.Source),
@@ -205,6 +214,7 @@ func (r *repository) InsertBatch(ctx context.Context, events []model.UsageEvent)
 			nullString(event.AuthLabelSnapshot),
 			nullString(event.AuthFileSnapshot),
 			nullString(event.AuthProviderSnapshot),
+			nullString(event.AuthAccountIDSnapshot),
 			nullString(event.AuthProjectIDSnapshot),
 			nullPositiveInt64(event.AuthSnapshotAtMS),
 			nullString(event.RequestedModel),
@@ -290,8 +300,9 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 	}
 	rows, err := r.db.QueryContext(ctx, `select
 		request_id, event_hash, timestamp_ms, timestamp, provider, executor_type, model, endpoint, method, path,
+		client_ip, x_forwarded_for, user_agent,
 		auth_type, auth_index, source, source_hash, api_key_hash,
-		account_snapshot, auth_label_snapshot, auth_file_snapshot, auth_provider_snapshot, auth_project_id_snapshot, auth_snapshot_at_ms,
+		account_snapshot, auth_label_snapshot, auth_file_snapshot, auth_provider_snapshot, auth_account_id_snapshot, auth_project_id_snapshot, auth_snapshot_at_ms,
 		requested_model, resolved_model, reasoning_effort, service_tier, request_service_tier, response_service_tier, cache_input_mode,
 		input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_tokens, cache_read_tokens, cache_creation_tokens,
 		normalized_uncached_input_tokens, normalized_total_input_tokens, normalized_cache_read_tokens, normalized_cache_creation_tokens, total_tokens,
@@ -309,7 +320,7 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 	events := make([]model.UsageEvent, 0)
 	for rows.Next() {
 		var event model.UsageEvent
-		var requestID, provider, executorType, endpoint, method, path, authType, authIndex, source, sourceHash, apiKeyHash, accountSnapshot, authLabelSnapshot, authFileSnapshot, authProviderSnapshot, authProjectIDSnapshot, requestedModel, resolvedModel, reasoningEffort, serviceTier, requestServiceTier, responseServiceTier, cacheInputMode, failSummary sql.NullString
+		var requestID, provider, executorType, endpoint, method, path, clientIP, xForwardedFor, userAgent, authType, authIndex, source, sourceHash, apiKeyHash, accountSnapshot, authLabelSnapshot, authFileSnapshot, authProviderSnapshot, authAccountIDSnapshot, authProjectIDSnapshot, requestedModel, resolvedModel, reasoningEffort, serviceTier, requestServiceTier, responseServiceTier, cacheInputMode, failSummary sql.NullString
 		var responseMetadataJSON, quotaPlanType, errorKind, errorCode, traceID, rawJSON string
 		var authSnapshotAt sql.NullInt64
 		var latency, ttft sql.NullInt64
@@ -329,6 +340,9 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 			&endpoint,
 			&method,
 			&path,
+			&clientIP,
+			&xForwardedFor,
+			&userAgent,
 			&authType,
 			&authIndex,
 			&source,
@@ -338,6 +352,7 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 			&authLabelSnapshot,
 			&authFileSnapshot,
 			&authProviderSnapshot,
+			&authAccountIDSnapshot,
 			&authProjectIDSnapshot,
 			&authSnapshotAt,
 			&requestedModel,
@@ -377,11 +392,15 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 			return nil, err
 		}
 		event.RequestID = requestID.String
+		event.AnalyticsModel = usageidentity.AnalyticsModelForRequest(event.Model, requestedModel.String)
 		event.Provider = provider.String
 		event.ExecutorType = executorType.String
 		event.Endpoint = endpoint.String
 		event.Method = method.String
 		event.Path = path.String
+		event.ClientIP = clientIP.String
+		event.XForwardedFor = xForwardedFor.String
+		event.UserAgent = userAgent.String
 		event.AuthType = authType.String
 		event.AuthIndex = authIndex.String
 		event.Source = source.String
@@ -391,6 +410,7 @@ func (r *repository) ListRecent(ctx context.Context, limit int) ([]model.UsageEv
 		event.AuthLabelSnapshot = authLabelSnapshot.String
 		event.AuthFileSnapshot = authFileSnapshot.String
 		event.AuthProviderSnapshot = authProviderSnapshot.String
+		event.AuthAccountIDSnapshot = authAccountIDSnapshot.String
 		event.AuthProjectIDSnapshot = authProjectIDSnapshot.String
 		event.RequestedModel = requestedModel.String
 		event.ResolvedModel = resolvedModel.String

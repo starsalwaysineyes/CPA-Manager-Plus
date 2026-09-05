@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 const (
@@ -1225,6 +1227,7 @@ func eventFromExportedRecord(record map[string]any) (Event, bool, error) {
 		Provider:                      provider,
 		ExecutorType:                  executorType,
 		Model:                         model,
+		AnalyticsModel:                usageidentity.AnalyticsModelForRequest(model, requestedModel),
 		RequestedModel:                requestedModel,
 		ResolvedModel:                 resolvedModel,
 		Endpoint:                      readString(record, "endpoint"),
@@ -1239,6 +1242,7 @@ func eventFromExportedRecord(record map[string]any) (Event, bool, error) {
 		AuthLabelSnapshot:             readString(record, "auth_label_snapshot", "authLabelSnapshot"),
 		AuthFileSnapshot:              readString(record, "auth_file_snapshot", "authFileSnapshot"),
 		AuthProviderSnapshot:          providerSnapshot,
+		AuthAccountIDSnapshot:         readString(record, "auth_account_id_snapshot", "authAccountIdSnapshot"),
 		AuthProjectIDSnapshot:         readString(record, "auth_project_id_snapshot", "authProjectIdSnapshot"),
 		AuthSnapshotAtMS:              readInt(record, "auth_snapshot_at_ms", "authSnapshotAtMs"),
 		ReasoningEffort:               readString(record, "reasoning_effort", "reasoningEffort"),
@@ -1392,6 +1396,10 @@ func eventFromLegacyDetail(
 	providerSnapshot := readString(detail, "auth_provider_snapshot", "authProviderSnapshot")
 	requestedModel := readString(detail, "requested_model", "requestedModel", "alias")
 	resolvedModel := readString(detail, "resolved_model", "resolvedModel")
+	displayModel := model
+	if requestedModel != "" {
+		displayModel = requestedModel
+	}
 	accounting := NormalizeCacheAccounting(CacheInputContext{
 		ExplicitMode:     cacheInputModeFromRecord(detail),
 		ExecutorType:     executorType,
@@ -1399,7 +1407,7 @@ func eventFromLegacyDetail(
 		ProviderSnapshot: providerSnapshot,
 		ResolvedModel:    resolvedModel,
 		RequestedModel:   requestedModel,
-		DisplayModel:     model,
+		DisplayModel:     displayModel,
 	}, inputTokens, cachedTokens, cacheTokens, cacheReadTokens, cacheCreationTokens)
 	if totalTokens <= 0 {
 		totalTokens = accounting.TotalInputTokens + maxInt64(outputTokens, 0) + maxInt64(reasoningTokens, 0)
@@ -1415,7 +1423,8 @@ func eventFromLegacyDetail(
 		Timestamp:                     normalizedTimestamp,
 		Provider:                      provider,
 		ExecutorType:                  executorType,
-		Model:                         model,
+		Model:                         displayModel,
+		AnalyticsModel:                usageidentity.AnalyticsModelForRequest(displayModel, requestedModel),
 		RequestedModel:                requestedModel,
 		ResolvedModel:                 resolvedModel,
 		Endpoint:                      endpoint,
@@ -1430,6 +1439,7 @@ func eventFromLegacyDetail(
 		AuthLabelSnapshot:             readString(detail, "auth_label_snapshot", "authLabelSnapshot"),
 		AuthFileSnapshot:              readString(detail, "auth_file_snapshot", "authFileSnapshot"),
 		AuthProviderSnapshot:          providerSnapshot,
+		AuthAccountIDSnapshot:         readString(detail, "auth_account_id_snapshot", "authAccountIdSnapshot"),
 		AuthProjectIDSnapshot:         readString(detail, "auth_project_id_snapshot", "authProjectIdSnapshot"),
 		AuthSnapshotAtMS:              readInt(detail, "auth_snapshot_at_ms", "authSnapshotAtMs"),
 		ReasoningEffort:               readString(detail, "reasoning_effort", "reasoningEffort"),
@@ -1471,7 +1481,12 @@ func eventFromLegacyDetail(
 		event.Endpoint = "-"
 	}
 	AttachResponseHeaderMetadata(&event, ResponseHeaderMetadataFromRecord(detail, time.UnixMilli(timestampMS)))
-	event.EventHash = buildEventHash(event)
+	// Compatible exports historically derive their synthetic event hash from
+	// the aggregate model key. Keep that identity stable even when a newer
+	// payload also carries the full requested model for audit/display purposes.
+	hashEvent := event
+	hashEvent.Model = model
+	event.EventHash = buildEventHash(hashEvent)
 	return event, nil
 }
 

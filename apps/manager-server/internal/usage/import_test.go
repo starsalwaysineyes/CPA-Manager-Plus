@@ -583,11 +583,16 @@ func TestNormalizeRawReadsCPA7118UsageFields(t *testing.T) {
 	}
 	if !event.Failed || event.FailStatusCode != 429 ||
 		!strings.Contains(event.FailBody, "rate limit exceeded") ||
-		!strings.Contains(event.FailBody, "Retry-After") {
+		strings.Contains(event.FailBody, "Retry-After") {
 		t.Fatalf("event failure = %#v", event)
 	}
-	if !strings.Contains(event.FailSummary, "rate limit exceeded") || !strings.Contains(event.FailSummary, "Retry-After") {
+	if !strings.Contains(event.FailSummary, "rate limit exceeded") || strings.Contains(event.FailSummary, "Retry-After") {
 		t.Fatalf("fail summary = %q", event.FailSummary)
+	}
+	if event.ResponseMetadata == nil || event.ResponseMetadata.Errors == nil ||
+		event.ResponseMetadata.Errors.RetryAfterSeconds == nil ||
+		*event.ResponseMetadata.Errors.RetryAfterSeconds != 30 {
+		t.Fatalf("response metadata = %#v", event.ResponseMetadata)
 	}
 	if event.LatencyMS == nil || *event.LatencyMS != 1500 {
 		t.Fatalf("latency = %#v", event.LatencyMS)
@@ -611,9 +616,48 @@ func TestNormalizeRawReadsCPA7118UsageFields(t *testing.T) {
 		detail.Tokens.CacheCreationTokens != 1 || detail.FailStatusCode != 429 ||
 		detail.Tokens.CachedTokens != 0 || detail.Tokens.CacheTokens != 0 ||
 		!strings.Contains(detail.FailSummary, "rate limit exceeded") ||
-		!strings.Contains(detail.FailSummary, "Retry-After") || detail.TTFTMS == nil ||
+		strings.Contains(detail.FailSummary, "Retry-After") || detail.ResponseMetadata == nil ||
+		detail.ResponseMetadata.Errors == nil || detail.TTFTMS == nil ||
 		*detail.TTFTMS != 450 {
 		t.Fatalf("detail = %#v", detail)
+	}
+}
+
+func TestNormalizeRawKeepsSuccessfulResponseHeadersOutOfFailureFields(t *testing.T) {
+	marker := strings.Repeat("large-success-header-marker-", 256)
+	payload, err := json.Marshal(map[string]any{
+		"timestamp": "2026-04-25T00:00:00Z",
+		"source":    "user@example.com",
+		"tokens": map[string]any{
+			"input_tokens": 1,
+			"total_tokens": 1,
+		},
+		"failed":   false,
+		"provider": "openai",
+		"model":    "gpt-5.4",
+		"endpoint": "POST /v1/chat/completions",
+		"response_headers": map[string]any{
+			"Content-Type":                 []any{"application/json"},
+			"X-CPAMP-Unindexed-Diagnostic": []any{marker},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	event, err := NormalizeRaw(payload)
+	if err != nil {
+		t.Fatalf("normalize successful response: %v", err)
+	}
+	if event.Failed || event.FailBody != "" || event.FailSummary != "" {
+		t.Fatalf("successful failure fields = failed:%v body:%q summary:%q", event.Failed, event.FailBody, event.FailSummary)
+	}
+	if event.ResponseMetadata == nil || event.ResponseMetadata.Response == nil ||
+		event.ResponseMetadata.Response.ContentType != "application/json" || event.ResponseMetadataJSON == "" {
+		t.Fatalf("response metadata = %#v json=%q", event.ResponseMetadata, event.ResponseMetadataJSON)
+	}
+	if !strings.Contains(event.RawJSON, marker) {
+		t.Fatalf("raw json did not preserve response headers")
 	}
 }
 
@@ -962,5 +1006,119 @@ func TestBuildPayloadExposesResolvedModelOnDetails(t *testing.T) {
 	}
 	if len(modelEntry.Details) != 1 || modelEntry.Details[0].ResolvedModel != "gpt-5.5" {
 		t.Fatalf("detail resolved_model = %#v", modelEntry.Details)
+	}
+}
+
+func TestBuildPayloadGroupsReasoningSuffixesByAnalyticsModel(t *testing.T) {
+	payload := BuildPayload([]Event{
+		{Model: "deepseek-v4-flash(low)", AnalyticsModel: "stale-model", ReasoningEffort: "low", TotalTokens: 1},
+		{Model: "deepseek-v4-flash(max)", ReasoningEffort: "max", TotalTokens: 1},
+		{Model: "custom-model(region-us)", TotalTokens: 1},
+	})
+	api := payload.APIs["-"]
+	if api == nil || len(api.Models) != 2 {
+		t.Fatalf("models = %#v", api)
+	}
+	canonical := api.Models["deepseek-v4-flash"]
+	if canonical == nil || len(canonical.Details) != 2 {
+		t.Fatalf("canonical details = %#v", canonical)
+	}
+	if canonical.Details[0].RequestedModel != "deepseek-v4-flash(low)" || canonical.Details[1].RequestedModel != "deepseek-v4-flash(max)" {
+		t.Fatalf("requested models = %#v", canonical.Details)
+	}
+	if api.Models["custom-model(region-us)"] == nil {
+		t.Fatalf("unknown suffix alias was removed: %#v", api.Models)
+	}
+}
+
+func TestCompatiblePayloadUsesRequestedModelWhenAggregateKeyDiffers(t *testing.T) {
+	result, err := ParseImportPayload([]byte(`{
+		"apis": {
+			"POST /v1/chat/completions": {
+				"models": {
+					"deepseek-v4-flash": {
+						"details": [{
+							"timestamp": "2026-08-12T10:00:00Z",
+							"requested_model": "deepseek-v4-flash(max)",
+							"tokens": {"total_tokens": 1},
+							"failed": false
+						}]
+					}
+				}
+			}
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("parse compatible payload: %v", err)
+	}
+	if len(result.Events) != 1 {
+		t.Fatalf("imported events = %d, want 1", len(result.Events))
+	}
+	event := result.Events[0]
+	if event.Model != "deepseek-v4-flash(max)" || event.RequestedModel != "deepseek-v4-flash(max)" {
+		t.Fatalf("requested identity = model:%q requested:%q", event.Model, event.RequestedModel)
+	}
+	if event.AnalyticsModel != "deepseek-v4-flash" {
+		t.Fatalf("analytics model = %q, want deepseek-v4-flash", event.AnalyticsModel)
+	}
+	legacyHashEvent := event
+	legacyHashEvent.Model = "deepseek-v4-flash"
+	if want := buildEventHash(legacyHashEvent); event.EventHash != want {
+		t.Fatalf("event hash = %q, want legacy-compatible %q", event.EventHash, want)
+	}
+}
+
+func TestCompatiblePayloadRoundTripPreservesReasoningSuffixModel(t *testing.T) {
+	original := Event{
+		Timestamp:       "2026-08-12T10:00:00Z",
+		TimestampMS:     1_755_000_000_000,
+		Endpoint:        "POST /v1/chat/completions",
+		Model:           "deepseek-v4-flash(max)",
+		ReasoningEffort: "max",
+		TotalTokens:     1,
+	}
+	payload, err := json.Marshal(BuildPayload([]Event{original}))
+	if err != nil {
+		t.Fatalf("marshal compatible payload: %v", err)
+	}
+
+	result, err := ParseImportPayload(payload)
+	if err != nil {
+		t.Fatalf("parse compatible payload: %v", err)
+	}
+	if len(result.Events) != 1 {
+		t.Fatalf("imported events = %d, want 1", len(result.Events))
+	}
+	imported := result.Events[0]
+	if imported.Model != original.Model {
+		t.Fatalf("model = %q, want %q", imported.Model, original.Model)
+	}
+	if imported.AnalyticsModel != "deepseek-v4-flash" {
+		t.Fatalf("analytics model = %q, want deepseek-v4-flash", imported.AnalyticsModel)
+	}
+	if imported.RequestedModel != original.Model {
+		t.Fatalf("requested model = %q, want %q", imported.RequestedModel, original.Model)
+	}
+}
+
+func TestCompatiblePayloadPrefersExplicitRequestedModelForAudit(t *testing.T) {
+	original := Event{
+		Timestamp:       "2026-08-12T10:00:00Z",
+		TimestampMS:     1_755_000_000_000,
+		Endpoint:        "POST /v1/chat/completions",
+		Model:           "stored-display-model",
+		RequestedModel:  "deepseek-v4-flash(max)",
+		ResolvedModel:   "deepseek-v4-flash",
+		ReasoningEffort: "max",
+		TotalTokens:     1,
+	}
+	payload := BuildPayload([]Event{original})
+	model := payload.APIs[original.Endpoint].Models["deepseek-v4-flash"]
+	if model == nil || len(model.Details) != 1 {
+		t.Fatalf("canonical model aggregate = %#v", payload.APIs[original.Endpoint].Models)
+	}
+	detail := model.Details[0]
+	if detail.RequestedModel != original.RequestedModel {
+		t.Fatalf("requested model = %q, want %q", detail.RequestedModel, original.RequestedModel)
 	}
 }

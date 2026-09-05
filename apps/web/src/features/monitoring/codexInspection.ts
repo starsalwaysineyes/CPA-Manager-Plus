@@ -1,7 +1,8 @@
-import { authFilesApi } from '@/services/api/authFiles';
+import { authFilesApi, type AuthFilesApiRequestScope } from '@/services/api/authFiles';
+import { createScopedApiRequestConfig } from '@/services/api/client';
 import type { TFunction } from 'i18next';
 import { getApiCallErrorMessage } from '@/services/api/apiCall';
-import type { AuthFileItem, Config } from '@/types';
+import type { AuthFileItem, Config, QuotaModelScope } from '@/types';
 import {
   CODEX_INSPECTION_AUTO_ACTION_MODES,
   CODEX_INSPECTION_SETTINGS_STORAGE_KEY,
@@ -23,7 +24,11 @@ import {
   serializeCodexInspectionLastRun,
   sortCodexInspectionResults as sortResults,
 } from '@/features/monitoring/model/codexInspectionStorage';
-import { getCodexInspectionOwnedDisableFileNames } from '@/features/monitoring/model/codexInspectionOwnership';
+import {
+  getCodexInspectionOwnedDisableIdentityKeys,
+  getCodexInspectionOwnershipIdentityKey,
+  hasCodexInspectionStableIdentity,
+} from '@/features/monitoring/model/codexInspectionOwnership';
 import {
   inspectSingleAccount,
   toInspectionAccount,
@@ -127,8 +132,10 @@ export interface CodexInspectionConfigurableSettings {
 
 export interface CodexInspectionAccount {
   key: string;
+  runtimeId?: string | null;
   fileName: string;
   displayAccount: string;
+  accountSnapshot?: string | null;
   authIndex: string | null;
   accountId: string | null;
   provider: string;
@@ -145,7 +152,11 @@ export interface CodexInspectionQuotaWindow {
   labelParams?: Record<string, string | number>;
   usedPercent: number | null;
   resetLabel: string;
+  resetAtMs?: number | null;
+  resetAccuracy?: 'exact' | 'derived' | 'estimated' | 'unknown';
   limitWindowSeconds: number | null;
+  modelScope?: QuotaModelScope;
+  providerWindowAliases?: string[];
 }
 
 export interface CodexInspectionResultItem extends CodexInspectionAccount {
@@ -158,6 +169,7 @@ export interface CodexInspectionResultItem extends CodexInspectionAccount {
   error: string;
   planType?: string | null;
   quotaWindows?: CodexInspectionQuotaWindow[];
+  quotaInventoryObserved?: boolean;
   errorKind?: string;
   errorDetail?: string;
   actionHandled?: boolean;
@@ -215,6 +227,7 @@ export interface CodexInspectionProgressSnapshot {
 
 export interface CodexInspectionExecutionOutcome {
   accountKey: string;
+  coveredByAccountKey?: string;
   action: CodexInspectionExecutionAction;
   fileName: string;
   displayAccount: string;
@@ -393,6 +406,11 @@ export const createCodexInspectionSession = ({
   deferCompletionLog = false,
 }: CreateCodexInspectionSessionOptions): CodexInspectionSession => {
   const resolvedSettings = resolveCodexInspectionSettings(config, apiBase, managementKey, settings);
+  const requestScope: AuthFilesApiRequestScope = {
+    apiBase: resolvedSettings.baseUrl,
+    managementKey: resolvedSettings.token,
+  };
+  const requestConfig = createScopedApiRequestConfig(requestScope);
   const translate = t ?? identityT;
   const sessionId = `codex-inspection-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -521,8 +539,8 @@ export const createCodexInspectionSession = ({
 
       void (
         account.provider === 'xai'
-          ? inspectSingleXaiAccount(account, resolvedSettings, onLog, translate)
-          : inspectSingleAccount(account, resolvedSettings, onLog, translate)
+          ? inspectSingleXaiAccount(account, resolvedSettings, onLog, translate, requestConfig)
+          : inspectSingleAccount(account, resolvedSettings, onLog, translate, requestConfig)
       )
         .then((inspectionResult) => {
           resultMap.set(inspectionResult.key, inspectionResult);
@@ -590,14 +608,14 @@ export const createCodexInspectionSession = ({
       }
     );
 
-    const authFilesResponse = await authFilesApi.list();
+    const authFilesResponse = await authFilesApi.list(requestScope);
     files = Array.isArray(authFilesResponse.files) ? authFilesResponse.files : [];
     const accounts = files.map(toInspectionAccount);
     const connectionFingerprint = createCodexInspectionConnectionFingerprint(
       resolvedSettings.baseUrl,
       resolvedSettings.token
     );
-    const ownedDisableFileNames = getCodexInspectionOwnedDisableFileNames(
+    const ownedDisableIdentityKeys = getCodexInspectionOwnedDisableIdentityKeys(
       connectionFingerprint ?? '',
       files
     );
@@ -605,7 +623,15 @@ export const createCodexInspectionSession = ({
       .filter((item) => resolvedSettings.targetTypes.includes(item.provider))
       .map((item) => ({
         ...item,
-        autoRecoverOwned: ownedDisableFileNames.has(item.fileName),
+        autoRecoverOwned: ownedDisableIdentityKeys.has(
+          getCodexInspectionOwnershipIdentityKey({
+            fileName: item.fileName,
+            provider: item.provider,
+            authIndex: item.authIndex,
+            accountId: item.accountId,
+            accountSnapshot: item.accountSnapshot,
+          })
+        ),
       }));
     sampledAccounts =
       resolvedSettings.sampleSize > 0
@@ -791,9 +817,11 @@ export interface CodexInspectionAutoActionPlan {
 const buildAutoActionPreflightOutcome = (
   item: CodexInspectionResultItem,
   status: Extract<CodexInspectionExecutionStatus, 'skipped' | 'needs_review'>,
-  error: string
+  error: string,
+  coveredByAccountKey?: string
 ): CodexInspectionExecutionOutcome => ({
   accountKey: item.key,
+  ...(coveredByAccountKey ? { coveredByAccountKey } : {}),
   action: item.action as CodexInspectionExecutionAction,
   fileName: item.fileName,
   displayAccount: item.displayAccount,
@@ -822,52 +850,108 @@ export const resolveCodexInspectionAutoActionPlan = (
     return false;
   };
 
-  const groups = new Map<string, CodexInspectionResultItem[]>();
-  items.filter(isExecutableAction).forEach((item) => {
+  const preparedItems = items.map((item) =>
+    normalizedMode === 'disable' && item.action === 'delete'
+      ? {
+          ...item,
+          action: 'disable' as const,
+          actionReason: item.actionReason
+            ? `${item.actionReason}；自动禁用策略改为禁用账号`
+            : '自动禁用策略改为禁用账号',
+        }
+      : item
+  );
+  const itemsByFile = new Map<string, CodexInspectionResultItem[]>();
+  preparedItems.forEach((item) => {
     const fileName = item.fileName.trim();
     if (!fileName) return;
-    const group = groups.get(fileName) ?? [];
-    group.push(item);
-    groups.set(fileName, group);
+    const fileItems = itemsByFile.get(fileName) ?? [];
+    fileItems.push(item);
+    itemsByFile.set(fileName, fileItems);
+  });
+
+  const groups: Array<{ items: CodexInspectionResultItem[]; mixed: boolean }> = [];
+  itemsByFile.forEach((allFileItems) => {
+    const fileItems = allFileItems.filter(isExecutableAction);
+    if (fileItems.length === 0) return;
+    if (fileItems.some((item) => item.action === 'delete')) {
+      groups.push({
+        items: fileItems,
+        mixed: allFileItems.some((item) => item.action !== 'delete'),
+      });
+      return;
+    }
+    const identityGroups = new Map<string, CodexInspectionResultItem[]>();
+    fileItems.forEach((item) => {
+      const identityKey = getCodexInspectionOwnershipIdentityKey({
+        fileName: item.fileName,
+        provider: item.provider,
+        authIndex: item.authIndex,
+        accountId: item.accountId,
+        accountSnapshot: item.accountSnapshot,
+      });
+      const identityItems = identityGroups.get(identityKey) ?? [];
+      identityItems.push(item);
+      identityGroups.set(identityKey, identityItems);
+    });
+    groups.push(
+      ...Array.from(identityGroups.values(), (identityItems) => ({
+        items: identityItems,
+        mixed: new Set(identityItems.map((item) => item.action)).size > 1,
+      }))
+    );
   });
 
   const executableItems: CodexInspectionResultItem[] = [];
   const preflightOutcomes: CodexInspectionExecutionOutcome[] = [];
   groups.forEach((group) => {
-    if (new Set(group.map((item) => item.action)).size > 1) {
-      group.forEach((item) =>
+    const stableItems = group.items.filter((item) =>
+      hasCodexInspectionStableIdentity({
+        fileName: item.fileName,
+        provider: item.provider,
+        authIndex: item.authIndex,
+        accountId: item.accountId,
+        accountSnapshot: item.accountSnapshot,
+      })
+    );
+    group.items
+      .filter((item) => allowsAction(item) && !stableItems.includes(item))
+      .forEach((item) =>
         preflightOutcomes.push(
           buildAutoActionPreflightOutcome(
             item,
             'needs_review',
-            '同一认证文件下存在多个不同建议动作，文件级处理已阻止，请到认证文件管理中手动处理'
+            '巡检结果缺少稳定账号标识，已阻止处理，请人工确认'
+          )
+        )
+      );
+    if (stableItems.length === 0) return;
+    if (group.mixed) {
+      stableItems.forEach((item) =>
+        preflightOutcomes.push(
+          buildAutoActionPreflightOutcome(
+            item,
+            'needs_review',
+            '同一认证文件下存在多个不同建议动作，文件级处理已阻止，请到凭证管理中手动处理'
           )
         )
       );
       return;
     }
 
-    const canonical = group[0];
-    if (!canonical || !allowsAction(canonical)) return;
-    executableItems.push(
-      normalizedMode === 'disable' && canonical.action === 'delete'
-        ? {
-            ...canonical,
-            action: 'disable',
-            actionReason: canonical.actionReason
-              ? `${canonical.actionReason}；自动禁用策略改为禁用账号`
-              : '自动禁用策略改为禁用账号',
-          }
-        : canonical
-    );
-    group
+    const eligible = stableItems.filter(allowsAction);
+    const canonical = eligible[0];
+    if (!canonical) return;
+    executableItems.push(canonical);
+    eligible
       .slice(1)
       .forEach((item) =>
         preflightOutcomes.push(
           buildAutoActionPreflightOutcome(
             item,
             'skipped',
-            'CPA 认证文件动作按文件执行，同名文件已由另一条结果处理'
+            '该认证目标已由另一条结果处理',
+            canonical.key
           )
         )
       );
@@ -894,9 +978,9 @@ export const applyCodexInspectionExecutionResult = (
   const successfulOutcomes = new Map(
     execution.outcomes
       .filter((item) => item.success && item.status === 'success')
-      .map((item) => [item.fileName, item] as const)
+      .map((item) => [item.accountKey, item] as const)
   );
-  const terminalPreflightOutcomes = new Map(
+  const nonExecutionOutcomes = new Map(
     execution.outcomes
       .filter((item) => item.status === 'skipped' || item.status === 'needs_review')
       .map((item) => [item.accountKey, item] as const)
@@ -904,13 +988,13 @@ export const applyCodexInspectionExecutionResult = (
   const refreshedAccounts = new Map(
     execution.refreshedFiles.map((file) => {
       const account = toInspectionAccount(file);
-      return [account.fileName, account] as const;
+      return [account.key, account] as const;
     })
   );
 
   const nextResults = sortResults(
     previousResult.results.map((item) => {
-      const refreshedAccount = refreshedAccounts.get(item.fileName);
+      const refreshedAccount = refreshedAccounts.get(item.key);
       const baseItem: CodexInspectionResultItem = refreshedAccount
         ? {
             ...item,
@@ -918,14 +1002,23 @@ export const applyCodexInspectionExecutionResult = (
             raw: refreshedAccount.raw,
           }
         : item;
-      const outcome = successfulOutcomes.get(item.fileName);
-      const terminalPreflight = terminalPreflightOutcomes.get(item.key);
+      const outcome = successfulOutcomes.get(item.key);
+      const nonExecutionOutcome = nonExecutionOutcomes.get(item.key);
 
-      if (terminalPreflight) {
+      if (nonExecutionOutcome) {
+        const coveringOutcome = nonExecutionOutcome.coveredByAccountKey
+          ? execution.outcomes.find(
+              (candidate) => candidate.accountKey === nonExecutionOutcome.coveredByAccountKey
+            )
+          : undefined;
+        const coveredActionHandled =
+          coveringOutcome?.status === 'success' || coveringOutcome?.status === 'skipped';
         return {
           ...baseItem,
-          actionHandled: true,
-          actionReason: terminalPreflight.error || baseItem.actionReason,
+          actionHandled:
+            nonExecutionOutcome.status === 'skipped' &&
+            (!nonExecutionOutcome.coveredByAccountKey || coveredActionHandled),
+          actionReason: nonExecutionOutcome.error || baseItem.actionReason,
         };
       }
       if (!outcome) {

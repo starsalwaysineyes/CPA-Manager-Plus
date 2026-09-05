@@ -9,22 +9,31 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
+
+	"github.com/seakee/cpa-manager-plus/apps/manager-server/internal/usageidentity"
 )
 
 type Event struct {
-	RequestID             string `json:"request_id,omitempty"`
-	EventHash             string `json:"event_hash"`
-	TimestampMS           int64  `json:"timestamp_ms"`
-	Timestamp             string `json:"timestamp"`
-	Provider              string `json:"provider,omitempty"`
-	ExecutorType          string `json:"executor_type,omitempty"`
-	Model                 string `json:"model"`
-	RequestedModel        string `json:"requested_model,omitempty"`
-	ResolvedModel         string `json:"resolved_model,omitempty"`
-	Endpoint              string `json:"endpoint,omitempty"`
-	Method                string `json:"method,omitempty"`
-	Path                  string `json:"path,omitempty"`
+	RequestID      string `json:"request_id,omitempty"`
+	EventHash      string `json:"event_hash"`
+	TimestampMS    int64  `json:"timestamp_ms"`
+	Timestamp      string `json:"timestamp"`
+	Provider       string `json:"provider,omitempty"`
+	ExecutorType   string `json:"executor_type,omitempty"`
+	Model          string `json:"model"`
+	AnalyticsModel string `json:"analytics_model,omitempty"`
+	RequestedModel string `json:"requested_model,omitempty"`
+	ResolvedModel  string `json:"resolved_model,omitempty"`
+	Endpoint       string `json:"endpoint,omitempty"`
+	Method         string `json:"method,omitempty"`
+	Path           string `json:"path,omitempty"`
+	// Downstream request metadata is available only to authenticated monitoring
+	// APIs. Compatible usage payloads and JSONL exports intentionally omit it.
+	ClientIP              string `json:"-"`
+	XForwardedFor         string `json:"-"`
+	UserAgent             string `json:"-"`
 	AuthType              string `json:"auth_type,omitempty"`
 	AuthIndex             string `json:"auth_index,omitempty"`
 	Source                string `json:"source,omitempty"`
@@ -34,6 +43,7 @@ type Event struct {
 	AuthLabelSnapshot     string `json:"auth_label_snapshot,omitempty"`
 	AuthFileSnapshot      string `json:"auth_file_snapshot,omitempty"`
 	AuthProviderSnapshot  string `json:"auth_provider_snapshot,omitempty"`
+	AuthAccountIDSnapshot string `json:"auth_account_id_snapshot,omitempty"`
 	AuthProjectIDSnapshot string `json:"auth_project_id_snapshot,omitempty"`
 	AuthSnapshotAtMS      int64  `json:"auth_snapshot_at_ms,omitempty"`
 	// ReasoningEffort is the request-side effort setting added by CPA v7.1.18+.
@@ -99,6 +109,14 @@ type LongContextTokens struct {
 	LongCacheCreationTokens int64
 }
 
+// PricingBand identifies the exact price rule used to aggregate a request.
+// ContextThresholdTokens is zero only for legacy/unclassified aggregates;
+// classified base-rate requests use model.ModelPriceBaseContextThreshold.
+type PricingBand struct {
+	PricingModel           string
+	ContextThresholdTokens int64
+}
+
 func (tokens *LongContextTokens) AddIfLongContext(input, output, cached, cacheRead, cacheCreation int64) {
 	if tokens == nil || !IsLongContextInput(input) {
 		return
@@ -119,10 +137,12 @@ type Detail struct {
 	AuthLabelSnapshot     string                  `json:"auth_label_snapshot,omitempty"`
 	AuthFileSnapshot      string                  `json:"auth_file_snapshot,omitempty"`
 	AuthProviderSnapshot  string                  `json:"auth_provider_snapshot,omitempty"`
+	AuthAccountIDSnapshot string                  `json:"auth_account_id_snapshot,omitempty"`
 	AuthProjectIDSnapshot string                  `json:"auth_project_id_snapshot,omitempty"`
 	AuthSnapshotAtMS      int64                   `json:"auth_snapshot_at_ms,omitempty"`
 	LatencyMS             *int64                  `json:"latency_ms,omitempty"`
 	TTFTMS                *int64                  `json:"ttft_ms,omitempty"`
+	RequestedModel        string                  `json:"requested_model,omitempty"`
 	ResolvedModel         string                  `json:"resolved_model,omitempty"`
 	ReasoningEffort       string                  `json:"reasoning_effort,omitempty"`
 	ServiceTier           string                  `json:"service_tier,omitempty"`
@@ -155,6 +175,9 @@ type Payload struct {
 
 const (
 	maxFailSummaryBytes            = 4096
+	maxClientIPBytes               = 64
+	maxXForwardedForBytes          = 2048
+	maxUserAgentBytes              = 1024
 	LongContextInputTokenThreshold = int64(272_000)
 	CacheInputModeIncluded         = "included_in_input"
 	CacheInputModeSeparate         = "separate_from_input"
@@ -531,6 +554,9 @@ func NormalizeRaw(raw []byte) (Event, error) {
 	provider := readString(record, "provider", "type", "auth_type", "authType")
 	executorType := readString(record, "executor_type", "executorType")
 	authType := readString(record, "auth_type", "authType")
+	clientIP := readString(record, "client_ip", "clientIp")
+	xForwardedFor := readString(record, "x_forwarded_for", "xForwardedFor")
+	userAgent := readString(record, "user_agent", "userAgent")
 	requestServiceTier := readString(record, "request_service_tier", "requestServiceTier", "service_tier", "serviceTier")
 	responseServiceTier := readString(record, "response_service_tier", "responseServiceTier")
 	authProviderSnapshot := readString(record, "auth_provider_snapshot", "authProviderSnapshot")
@@ -557,11 +583,15 @@ func NormalizeRaw(raw []byte) (Event, error) {
 		Provider:                      provider,
 		ExecutorType:                  executorType,
 		Model:                         model,
+		AnalyticsModel:                usageidentity.AnalyticsModelForRequest(model, requestedModel),
 		RequestedModel:                requestedModel,
 		ResolvedModel:                 resolvedModel,
 		Endpoint:                      endpoint,
 		Method:                        method,
 		Path:                          path,
+		ClientIP:                      clientIP,
+		XForwardedFor:                 xForwardedFor,
+		UserAgent:                     userAgent,
 		AuthType:                      authType,
 		AuthIndex:                     authIndex,
 		Source:                        source,
@@ -571,6 +601,7 @@ func NormalizeRaw(raw []byte) (Event, error) {
 		AuthLabelSnapshot:             readString(record, "auth_label_snapshot", "authLabelSnapshot"),
 		AuthFileSnapshot:              readString(record, "auth_file_snapshot", "authFileSnapshot"),
 		AuthProviderSnapshot:          authProviderSnapshot,
+		AuthAccountIDSnapshot:         readString(record, "auth_account_id_snapshot", "authAccountIdSnapshot"),
 		AuthProjectIDSnapshot:         readString(record, "auth_project_id_snapshot", "authProjectIdSnapshot", "project_id", "projectId"),
 		AuthSnapshotAtMS:              readInt(record, "auth_snapshot_at_ms", "authSnapshotAtMs"),
 		ReasoningEffort:               readString(record, "reasoning_effort", "reasoningEffort"),
@@ -602,6 +633,8 @@ func NormalizeRaw(raw []byte) (Event, error) {
 	if event.Model == "" {
 		event.Model = "-"
 	}
+	event.AnalyticsModel = usageidentity.AnalyticsModelForRequest(event.Model, event.RequestedModel)
+	NormalizeRequestMetadata(&event)
 	AttachResponseHeaderMetadata(&event, ResponseHeaderMetadataFromRecord(record, time.UnixMilli(timestampMS)))
 	event.EventHash = buildEventHash(event)
 	return event, nil
@@ -627,7 +660,7 @@ func BuildPayload(events []Event) Payload {
 			apiEntry = &APIAggregate{Models: map[string]*ModelAggregate{}}
 			payload.APIs[endpoint] = apiEntry
 		}
-		model := event.Model
+		model := usageidentity.AnalyticsModelForRequest(event.Model, event.RequestedModel)
 		if model == "" {
 			model = "-"
 		}
@@ -642,6 +675,10 @@ func BuildPayload(events []Event) Payload {
 			event.CacheReadTokens,
 			event.CacheCreationTokens,
 		)
+		requestedModel := event.RequestedModel
+		if requestedModel == "" {
+			requestedModel = event.Model
+		}
 		modelEntry.Details = append(modelEntry.Details, Detail{
 			Timestamp:             event.Timestamp,
 			Source:                event.Source,
@@ -651,10 +688,12 @@ func BuildPayload(events []Event) Payload {
 			AuthLabelSnapshot:     event.AuthLabelSnapshot,
 			AuthFileSnapshot:      event.AuthFileSnapshot,
 			AuthProviderSnapshot:  event.AuthProviderSnapshot,
+			AuthAccountIDSnapshot: event.AuthAccountIDSnapshot,
 			AuthProjectIDSnapshot: event.AuthProjectIDSnapshot,
 			AuthSnapshotAtMS:      event.AuthSnapshotAtMS,
 			LatencyMS:             event.LatencyMS,
 			TTFTMS:                event.TTFTMS,
+			RequestedModel:        requestedModel,
 			ResolvedModel:         event.ResolvedModel,
 			ReasoningEffort:       event.ReasoningEffort,
 			ServiceTier:           event.ServiceTier,
@@ -775,25 +814,7 @@ func readFailFields(record map[string]any) (int64, string) {
 	if body == "" {
 		body = readString(record, "fail_body", "failBody")
 	}
-	if headers, ok := compactJSON(first(record, "response_headers", "responseHeaders", "headers")); ok && headers != "{}" && headers != "[]" {
-		if body == "" {
-			body = headers
-		} else {
-			body = body + "\n" + headers
-		}
-	}
 	return statusCode, body
-}
-
-func compactJSON(value any) (string, bool) {
-	if value == nil {
-		return "", false
-	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		return "", false
-	}
-	return string(data), true
 }
 
 func readOptionalInt(record map[string]any, keys ...string) *int64 {
@@ -822,6 +843,35 @@ func readString(record map[string]any, keys ...string) string {
 	default:
 		return strings.TrimSpace(fmt.Sprint(value))
 	}
+}
+
+// NormalizeRequestMetadata applies the storage limits and character policy for
+// downstream request metadata. Callers that construct Event values directly
+// must normalize again at their persistence boundary.
+func NormalizeRequestMetadata(event *Event) {
+	if event == nil {
+		return
+	}
+	event.ClientIP = sanitizeRequestMetadata(event.ClientIP, maxClientIPBytes)
+	event.XForwardedFor = sanitizeRequestMetadata(event.XForwardedFor, maxXForwardedForBytes)
+	event.UserAgent = sanitizeRequestMetadata(event.UserAgent, maxUserAgentBytes)
+}
+
+func sanitizeRequestMetadata(value string, maxBytes int) string {
+	cleaned := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || !unicode.IsGraphic(r) {
+			return ' '
+		}
+		return r
+	}, value)
+	cleaned = strings.Join(strings.Fields(cleaned), " ")
+	if maxBytes <= 0 || len(cleaned) <= maxBytes {
+		return cleaned
+	}
+	if maxBytes <= 3 {
+		return truncateUTF8Bytes(cleaned, maxBytes)
+	}
+	return truncateUTF8Bytes(cleaned, maxBytes-3)
 }
 
 func readStringFromNested(record map[string]any, parent string, keys ...string) string {
@@ -1003,6 +1053,10 @@ func redactValueWithParent(parentKey string, value any) any {
 				result[key] = "[redacted]"
 				continue
 			}
+			if maxBytes, ok := requestMetadataMaxBytes(normalizedKey); ok {
+				result[key] = sanitizeRequestMetadata(stringValue(child), maxBytes)
+				continue
+			}
 			if normalizedKey == "fail_body" || (parentKey == "fail" && normalizedKey == "body") {
 				result[key] = FailSummaryFromBody(stringValue(child))
 				continue
@@ -1018,6 +1072,19 @@ func redactValueWithParent(parentKey string, value any) any {
 		return result
 	default:
 		return value
+	}
+}
+
+func requestMetadataMaxBytes(normalizedKey string) (int, bool) {
+	switch normalizedKey {
+	case "client_ip", "clientip":
+		return maxClientIPBytes, true
+	case "x_forwarded_for", "xforwardedfor":
+		return maxXForwardedForBytes, true
+	case "user_agent", "useragent":
+		return maxUserAgentBytes, true
+	default:
+		return 0, false
 	}
 }
 

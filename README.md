@@ -1,5 +1,10 @@
 <div align="center">
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="logo-white.svg">
+  <img src="logo.svg" alt="CPAMP" width="480">
+</picture>
+
 # CPA Manager Plus
 
 [![Release](https://img.shields.io/github/v/release/seakee/CPA-Manager-Plus?style=flat-square)](https://github.com/seakee/CPA-Manager-Plus/releases/latest)
@@ -27,7 +32,7 @@ Operate providers, credentials, OAuth, plugins, and configuration while keeping 
   <tr>
     <td align="center">
       <strong>Dashboard</strong><br>
-      <img src="img/home.png" alt="CPA CLIProxyAPI management and observability dashboard" width="420">
+      <img src="img/dashboard.png" alt="CPA CLIProxyAPI management and observability dashboard" width="420">
     </td>
     <td align="center">
       <strong>Request Monitoring</strong><br>
@@ -40,8 +45,18 @@ Operate providers, credentials, OAuth, plugins, and configuration while keeping 
       <img src="img/usage-analytics.png" alt="CPA usage and cost analytics by model and account" width="420">
     </td>
     <td align="center">
-      <strong>Account Health</strong><br>
-      <img src="img/codex-inspection.png" alt="Codex and xAI account inspection and quota health" width="420">
+      <strong>Credential Management</strong><br>
+      <img src="img/credential.png" alt="CPA credential management list with availability, usage, quota, and actions" width="420">
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <strong>Credential Health Inspection</strong><br>
+      <img src="img/credential-health.png" alt="CPA credential health inspection status, history, and results" width="420">
+    </td>
+    <td align="center">
+      <strong>Credential Quota</strong><br>
+      <img src="img/credential-quota.png" alt="CPA credential quota usage, current window, and forecast" width="420">
     </td>
   </tr>
 </table>
@@ -77,7 +92,7 @@ See [Choosing A CPA Panel](https://seakee.github.io/CPA-Manager-Plus/docs/en/gui
 
 - Break down calls, tokens, cost, latency, and failures by model, provider, account, credential, API key, project, channel, and time range.
 - Track input, output, reasoning, cache, service tier, and long-context pricing semantics.
-- Sync model prices from LiteLLM and OpenRouter, with local overrides for aliases or internal models.
+- Sync model prices from models.dev first, with LiteLLM and OpenRouter fallbacks plus local overrides for aliases or internal models.
 - Open the [Usage Analytics Demo](https://seakee.github.io/CPA-Manager-Plus/#/demo/usage-analytics).
 
 ### Account Health, Quota, And Automation
@@ -85,13 +100,14 @@ See [Choosing A CPA Panel](https://seakee.github.io/CPA-Manager-Plus/docs/en/gui
 - Inspect Codex and xAI accounts locally or on a Manager Server schedule.
 - Read quota windows, reset evidence, credential state, workspace state, and provider-specific health signals when available.
 - Apply controlled quota cooldowns and route credential failures into an account action queue for review and recovery.
-- Open the [Account Inspection Demo](https://seakee.github.io/CPA-Manager-Plus/#/demo/codex-inspection) and [Auth Files Demo](https://seakee.github.io/CPA-Manager-Plus/#/demo/auth-files).
+- Open the unified [Accounts Demo](https://seakee.github.io/CPA-Manager-Plus/#/demo/accounts).
 
 ### Production Operations
 
 - Run CPAMP Full Mode as one Docker container or a native Linux, macOS, or Windows package for amd64/arm64; the full stack can run alongside CPA.
 - Keep request history, Manager configuration, automation state, and model prices in local files with no account registration or telemetry SDK.
 - Back up SQLite files together with `data.key` to preserve encrypted CPA Management Keys.
+- If you harden the runtime with a read-only root filesystem or a non-root user, give SQLite a writable temporary directory and a writable database file; see [Read-Only Root Filesystem](https://seakee.github.io/CPA-Manager-Plus/docs/en/deployment/docker.html).
 
 Want to preview the interface first? Open the [Live Demo](https://seakee.github.io/CPA-Manager-Plus/). The demo uses fictional data only. It is not a deployment or runtime mode and cannot connect to, manage, or monitor a real CPA instance.
 
@@ -164,18 +180,18 @@ Recommended CPA version: `v7.1.39+`. The HTTP usage queue needs `v6.10.8+`.
 
 ## Documentation
 
-| Task                                                      | Guide                                                                                                                                                                                                |
-| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Choose the right panel and deployment mode                | [Choosing A CPA Panel](https://seakee.github.io/CPA-Manager-Plus/docs/en/guide/choosing-a-panel.html)                                                                                                |
-| Replace the official UI without deploying another service | [CPAMP Lightweight Panel](https://seakee.github.io/CPA-Manager-Plus/docs/en/deployment/cpa-panel.html)                                                                                               |
-| Install and complete first setup                          | [Getting Started](https://seakee.github.io/CPA-Manager-Plus/docs/en/guide/getting-started.html)                                                                                                      |
-| Understand supported features and modes                   | [Capability Matrix](https://seakee.github.io/CPA-Manager-Plus/docs/en/reference/capability-matrix.html)                                                                                              |
-| Understand runtime ports, keys, and request flow          | [Runtime Model](https://seakee.github.io/CPA-Manager-Plus/docs/en/guide/runtime-model.html)                                                                                                          |
-| Configure providers, credentials, quota, and plugins      | [Panel Manual](https://seakee.github.io/CPA-Manager-Plus/docs/en/manual/ai-providers.html)                                                                                                           |
-| Operate Manager Server, backups, upgrades, and migrations | [Manager Server Guide](https://seakee.github.io/CPA-Manager-Plus/docs/en/operations/manager-server.html)                                                                                             |
-| Back up data or recover a lost admin key                  | [Backup And Restore](https://seakee.github.io/CPA-Manager-Plus/docs/en/operations/backup.html), [Reset Admin Key](https://seakee.github.io/CPA-Manager-Plus/docs/en/operations/reset-admin-key.html) |
-| Migrate from the legacy CPA-Manager                       | [Migration From CPA-Manager](https://seakee.github.io/CPA-Manager-Plus/docs/en/migration/from-cpa-manager.html)                                                                                      |
-| Diagnose empty monitoring or queue problems               | [Troubleshooting](https://seakee.github.io/CPA-Manager-Plus/docs/en/troubleshooting/request-monitoring.html)                                                                                         |
+| Task                                                      | Guide                                                                                                                                                                                                                                                                      |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Choose the right panel and deployment mode                | [Choosing A CPA Panel](https://seakee.github.io/CPA-Manager-Plus/docs/en/guide/choosing-a-panel.html)                                                                                                                                                                      |
+| Replace the official UI without deploying another service | [CPAMP Lightweight Panel](https://seakee.github.io/CPA-Manager-Plus/docs/en/deployment/cpa-panel.html)                                                                                                                                                                     |
+| Install and complete first setup                          | [Getting Started](https://seakee.github.io/CPA-Manager-Plus/docs/en/guide/getting-started.html)                                                                                                                                                                            |
+| Understand supported features and modes                   | [Capability Matrix](https://seakee.github.io/CPA-Manager-Plus/docs/en/reference/capability-matrix.html)                                                                                                                                                                    |
+| Understand runtime ports, keys, and request flow          | [Runtime Model](https://seakee.github.io/CPA-Manager-Plus/docs/en/guide/runtime-model.html)                                                                                                                                                                                |
+| Configure providers, credentials, quota, and plugins      | [AI Providers](https://seakee.github.io/CPA-Manager-Plus/docs/en/manual/ai-providers.html), [Accounts](https://seakee.github.io/CPA-Manager-Plus/docs/en/manual/accounts.html), [Plugin Management](https://seakee.github.io/CPA-Manager-Plus/docs/en/manual/plugins.html) |
+| Operate Manager Server, backups, upgrades, and migrations | [Manager Server Guide](https://seakee.github.io/CPA-Manager-Plus/docs/en/operations/manager-server.html)                                                                                                                                                                   |
+| Back up data or recover a lost admin key                  | [Backup And Restore](https://seakee.github.io/CPA-Manager-Plus/docs/en/operations/backup.html), [Reset Admin Key](https://seakee.github.io/CPA-Manager-Plus/docs/en/operations/reset-admin-key.html)                                                                       |
+| Migrate from the legacy CPA-Manager                       | [Migration From CPA-Manager](https://seakee.github.io/CPA-Manager-Plus/docs/en/migration/from-cpa-manager.html)                                                                                                                                                            |
+| Diagnose empty monitoring or queue problems               | [Troubleshooting](https://seakee.github.io/CPA-Manager-Plus/docs/en/troubleshooting/request-monitoring.html)                                                                                                                                                               |
 
 ## Data, Privacy, And Security
 
@@ -218,8 +234,17 @@ docker compose -f docker-compose.manager.yml up --build
 
 - `npm run build` creates a single-file `apps/web/dist/index.html`.
 - `bin/release/package-native.sh` embeds the panel into native packages.
-- Tag pushes such as `vX.Y.Z` trigger `.github/workflows/release.yml`.
+- Create release notes through `release/<version> -> dev -> main`, then push a
+  strict `vX.Y.Z` or prerelease tag from the verified `main` promotion merge.
+- `npm run release:validate -- --tag <tag> --content-only` checks the three
+  required release files before a tag is created.
+- `.github/workflows/release.yml` offers a `workflow_dispatch` dry-run from
+  `main`; it validates and builds without publishing a GitHub Release,
+  container image, or Telegram message.
 - Release assets include `management.html`, native packages, and Docker images for `linux/amd64` and `linux/arm64`.
+- Release publishing is serialized and has no automatic commit-log fallback;
+  missing or mismatched notes fail closed. See [`docs/release.md`](docs/release.md)
+  for recovery and required repository protections.
 
 ## Acknowledgements
 

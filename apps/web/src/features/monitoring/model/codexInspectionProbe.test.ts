@@ -71,6 +71,79 @@ const createUsageResult = (usedPercent: number, extraWindows = {}) => ({
   },
 });
 
+describe('toInspectionAccount', () => {
+  it('keeps same-name credentials without auth_index distinct by account snapshot', () => {
+    const first = toInspectionAccount({
+      name: 'shared.json',
+      type: 'codex',
+      account: 'first@example.test',
+    });
+    const second = toInspectionAccount({
+      name: 'shared.json',
+      type: 'codex',
+      account: 'second@example.test',
+    });
+
+    expect(first.key).not.toBe(second.key);
+    expect(
+      toInspectionAccount({
+        name: 'shared.json',
+        type: 'codex',
+        account: 'first@example.test',
+        disabled: true,
+      }).key
+    ).toBe(first.key);
+  });
+
+  it('uses the account ID before a mutable display label for a missing auth_index', () => {
+    const first = toInspectionAccount({
+      name: 'shared.json',
+      type: 'codex',
+      account: 'old-label@example.test',
+      account_id: 'account-1',
+    });
+    const renamed = toInspectionAccount({
+      name: 'shared.json',
+      type: 'codex',
+      account: 'new-label@example.test',
+      account_id: 'account-1',
+    });
+
+    expect(renamed.key).toBe(first.key);
+  });
+
+  it('uses generic project identity and display-account aliases', () => {
+    const account = toInspectionAccount({
+      name: 'vertex.json',
+      type: 'vertex',
+      project_id: 'vertex-project-42',
+      display_account: 'vertex@example.test',
+    });
+
+    expect(account.accountId).toBe('vertex-project-42');
+    expect(account.displayAccount).toBe('vertex@example.test');
+  });
+
+  it('uses a label for display without promoting it to an account snapshot', () => {
+    const account = toInspectionAccount({
+      id: 'runtime-label-only',
+      name: 'shared.json',
+      type: 'codex',
+      label: 'Friendly account',
+    });
+    const renamed = toInspectionAccount({
+      id: 'runtime-label-only',
+      name: 'shared.json',
+      type: 'codex',
+      label: 'Renamed account',
+    });
+
+    expect(account.displayAccount).toBe('Friendly account');
+    expect(account.accountSnapshot).toBeNull();
+    expect(renamed.key).toBe(account.key);
+  });
+});
+
 describe('inspectSingleAccount', () => {
   beforeEach(() => {
     mockRequestCodexUsageRaw.mockReset();
@@ -131,6 +204,7 @@ describe('inspectSingleAccount', () => {
     expect(result.usedPercent).toBe(5);
     expect(result.isQuota).toBe(false);
     expect(result.planType).toBe('free');
+    expect(result.quotaInventoryObserved).toBe(true);
     expect(result.quotaWindows).toEqual([
       expect.objectContaining({
         id: 'monthly',
@@ -360,7 +434,26 @@ describe('inspectSingleAccount', () => {
       usedPercent: null,
       isQuota: false,
       autoRecoverEligible: false,
+      quotaInventoryObserved: false,
     });
+  });
+
+  it('preserves an explicitly observed empty Codex quota inventory', async () => {
+    mockRequestCodexUsageRaw.mockResolvedValue({
+      result: {
+        statusCode: 200,
+        hasStatusCode: true,
+        header: {},
+        bodyText: '{"rate_limit":{}}',
+        body: { rate_limit: {} },
+      },
+      payload: { rate_limit: {} },
+    });
+
+    const result = await inspectSingleAccount(baseAccount, settings);
+
+    expect(result.quotaWindows).toEqual([]);
+    expect(result.quotaInventoryObserved).toBe(true);
   });
 
   it('keeps a disabled account while the five-hour window is exhausted', async () => {

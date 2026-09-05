@@ -2,8 +2,39 @@ import i18n from '@/i18n';
 import { maskApiKey } from './format';
 import { normalizeAuthIndex } from './authIndex';
 import { parseTimestampMs } from './timestamp';
+import { normalizeAnalyticsModel } from './analyticsModel';
 
 export { normalizeAuthIndex };
+export { normalizeAnalyticsModel } from './analyticsModel';
+
+export interface ModelPriceContextTier {
+  thresholdTokens: number;
+  prompt: number;
+  completion: number;
+  cache: number;
+  cacheRead?: number;
+  cacheCreation?: number;
+  promptConfigured?: boolean;
+  completionConfigured?: boolean;
+  cacheConfigured?: boolean;
+  cacheReadConfigured?: boolean;
+  cacheCreationConfigured?: boolean;
+}
+
+export interface ModelPriceServiceTier {
+  mode: string;
+  serviceTier: string;
+  prompt: number;
+  completion: number;
+  cache: number;
+  cacheRead?: number;
+  cacheCreation?: number;
+  promptConfigured?: boolean;
+  completionConfigured?: boolean;
+  cacheConfigured?: boolean;
+  cacheReadConfigured?: boolean;
+  cacheCreationConfigured?: boolean;
+}
 
 export interface ModelPrice {
   prompt: number;
@@ -18,6 +49,8 @@ export interface ModelPrice {
   source?: string;
   sourceModelId?: string;
   rawJson?: string;
+  contextTiers?: ModelPriceContextTier[];
+  serviceTiers?: ModelPriceServiceTier[];
   updatedAtMs?: number;
   syncedAtMs?: number;
 }
@@ -144,6 +177,8 @@ export interface UsageResponseHeaderMetadata {
 export interface UsageDetail {
   timestamp: string;
   source: string;
+  source_hash?: string;
+  sourceHash?: string;
   auth_index: string | number | null;
   api_key_hash?: string;
   apiKeyHash?: string;
@@ -155,12 +190,20 @@ export interface UsageDetail {
   authFileSnapshot?: string;
   auth_provider_snapshot?: string;
   authProviderSnapshot?: string;
+  auth_account_id_snapshot?: string;
+  authAccountIdSnapshot?: string;
   auth_project_id_snapshot?: string;
   authProjectIdSnapshot?: string;
   auth_snapshot_at_ms?: number;
   authSnapshotAtMs?: number;
   auth_type?: string;
   authType?: string;
+  client_ip?: string;
+  clientIp?: string;
+  x_forwarded_for?: string;
+  xForwardedFor?: string;
+  user_agent?: string;
+  userAgent?: string;
   reasoning_effort?: string;
   reasoningEffort?: string;
   service_tier?: string;
@@ -179,6 +222,8 @@ export interface UsageDetail {
   recovered_after_retry?: boolean;
   recoveredAfterRetry?: boolean;
   provider?: string;
+  analytics_model?: string;
+  analyticsModel?: string;
   requested_model?: string;
   requestedModel?: string;
   resolved_model?: string;
@@ -208,6 +253,7 @@ export interface UsageDetail {
   fail_body?: string;
   failBody?: string;
   __modelName?: string;
+  __requestedModel?: string;
   __resolvedModel?: string;
   __timestampMs?: number;
 }
@@ -757,8 +803,7 @@ const readTokens = (detail: Record<string, unknown>, modelName: string): UsageTo
       provider: detail.provider,
       providerSnapshot: detail.auth_provider_snapshot ?? detail.authProviderSnapshot,
       resolvedModel: detail.resolved_model ?? detail.resolvedModel,
-      requestedModel:
-        detail.requested_model ?? detail.requestedModel ?? detail.alias,
+      requestedModel: detail.requested_model ?? detail.requestedModel ?? detail.alias,
       displayModel: modelName,
     },
     inputTokens: tokensRaw.input_tokens ?? tokensRaw.inputTokens,
@@ -828,6 +873,11 @@ export function collectUsageDetails(usageData: unknown): UsageDetail[] {
         const latencyMs = extractLatencyMs(detailRaw);
         const ttftMs = extractTTFTMs(detailRaw);
         const failRaw = isRecord(detailRaw.fail) ? detailRaw.fail : {};
+        const requestedModel =
+          readDetailString(
+            detailRaw.requested_model ?? detailRaw.requestedModel ?? detailRaw.alias
+          ) || modelName;
+        const analyticsModel = normalizeAnalyticsModel(requestedModel);
         details.push({
           timestamp,
           source: normalizeSourceWithCache(sourceCache, detailRaw.source),
@@ -848,6 +898,9 @@ export function collectUsageDetails(usageData: unknown): UsageDetail[] {
           auth_provider_snapshot: readDetailString(
             detailRaw.auth_provider_snapshot ?? detailRaw.authProviderSnapshot
           ),
+          auth_account_id_snapshot: readDetailString(
+            detailRaw.auth_account_id_snapshot ?? detailRaw.authAccountIdSnapshot
+          ),
           auth_project_id_snapshot: readDetailString(
             detailRaw.auth_project_id_snapshot ?? detailRaw.authProjectIdSnapshot
           ),
@@ -863,12 +916,9 @@ export function collectUsageDetails(usageData: unknown): UsageDetail[] {
           provider: readDetailString(
             detailRaw.provider ?? detailRaw.type ?? detailRaw.auth_type ?? detailRaw.authType
           ),
-          requested_model: readDetailString(
-            detailRaw.requested_model ?? detailRaw.requestedModel ?? detailRaw.alias
-          ),
-          resolved_model: readDetailString(
-            detailRaw.resolved_model ?? detailRaw.resolvedModel
-          ),
+          analytics_model: analyticsModel,
+          requested_model: requestedModel,
+          resolved_model: readDetailString(detailRaw.resolved_model ?? detailRaw.resolvedModel),
           latency_ms: latencyMs ?? undefined,
           ttft_ms: ttftMs ?? undefined,
           request_service_tier: readDetailString(
@@ -912,7 +962,8 @@ export function collectUsageDetails(usageData: unknown): UsageDetail[] {
           ),
           header_trace_id: readDetailString(detailRaw.header_trace_id ?? detailRaw.headerTraceId),
           fail_body: readDetailString(detailRaw.fail_body ?? detailRaw.failBody ?? failRaw.body),
-          __modelName: modelName,
+          __modelName: analyticsModel,
+          __requestedModel: requestedModel,
           __resolvedModel: readDetailString(detailRaw.resolved_model ?? detailRaw.resolvedModel),
           __timestampMs: Number.isNaN(timestampMs) ? 0 : timestampMs,
         });
@@ -957,6 +1008,11 @@ export function collectUsageDetailsWithEndpoint(usageData: unknown): UsageDetail
         const latencyMs = extractLatencyMs(detailRaw);
         const ttftMs = extractTTFTMs(detailRaw);
         const failRaw = isRecord(detailRaw.fail) ? detailRaw.fail : {};
+        const requestedModel =
+          readDetailString(
+            detailRaw.requested_model ?? detailRaw.requestedModel ?? detailRaw.alias
+          ) || modelName;
+        const analyticsModel = normalizeAnalyticsModel(requestedModel);
         details.push({
           timestamp,
           source: normalizeSourceWithCache(sourceCache, detailRaw.source),
@@ -977,6 +1033,9 @@ export function collectUsageDetailsWithEndpoint(usageData: unknown): UsageDetail
           auth_provider_snapshot: readDetailString(
             detailRaw.auth_provider_snapshot ?? detailRaw.authProviderSnapshot
           ),
+          auth_account_id_snapshot: readDetailString(
+            detailRaw.auth_account_id_snapshot ?? detailRaw.authAccountIdSnapshot
+          ),
           auth_project_id_snapshot: readDetailString(
             detailRaw.auth_project_id_snapshot ?? detailRaw.authProjectIdSnapshot
           ),
@@ -992,12 +1051,9 @@ export function collectUsageDetailsWithEndpoint(usageData: unknown): UsageDetail
           provider: readDetailString(
             detailRaw.provider ?? detailRaw.type ?? detailRaw.auth_type ?? detailRaw.authType
           ),
-          requested_model: readDetailString(
-            detailRaw.requested_model ?? detailRaw.requestedModel ?? detailRaw.alias
-          ),
-          resolved_model: readDetailString(
-            detailRaw.resolved_model ?? detailRaw.resolvedModel
-          ),
+          analytics_model: analyticsModel,
+          requested_model: requestedModel,
+          resolved_model: readDetailString(detailRaw.resolved_model ?? detailRaw.resolvedModel),
           request_service_tier: readDetailString(
             detailRaw.request_service_tier ?? detailRaw.requestServiceTier
           ),
@@ -1041,7 +1097,8 @@ export function collectUsageDetailsWithEndpoint(usageData: unknown): UsageDetail
           ),
           header_trace_id: readDetailString(detailRaw.header_trace_id ?? detailRaw.headerTraceId),
           fail_body: readDetailString(detailRaw.fail_body ?? detailRaw.failBody ?? failRaw.body),
-          __modelName: modelName,
+          __modelName: analyticsModel,
+          __requestedModel: requestedModel,
           __resolvedModel: readDetailString(detailRaw.resolved_model ?? detailRaw.resolvedModel),
           __endpoint: endpoint,
           __endpointMethod: endpointMethod,
@@ -1089,6 +1146,7 @@ export function calculateCost(
     UsageDetail,
     | 'tokens'
     | '__modelName'
+    | '__requestedModel'
     | '__resolvedModel'
     | 'service_tier'
     | 'serviceTier'
@@ -1107,15 +1165,19 @@ export function calculateCost(
   modelPrices: Record<string, ModelPrice>
 ): number {
   const resolvedModel = detail.__resolvedModel || '';
-  const requestedModel = detail.__modelName || '';
+  const analyticsModel = detail.__modelName || '';
+  const requestedModel = detail.__requestedModel || analyticsModel;
   const resolvedPrice = resolvedModel ? modelPrices[resolvedModel] : undefined;
+  const analyticsPrice = analyticsModel ? modelPrices[analyticsModel] : undefined;
   const requestedPrice = requestedModel ? modelPrices[requestedModel] : undefined;
-  const behaviorModel = resolvedModel || requestedModel;
+  const behaviorModel = resolvedModel || analyticsModel || requestedModel;
   const behaviorFallback = getOfficialGpt56Price(behaviorModel);
   const officialCandidatePrice =
-    getOfficialGpt56Price(resolvedModel) || getOfficialGpt56Price(requestedModel);
-  const configuredPrice = resolvedPrice || requestedPrice;
-  const price = configuredPrice
+    getOfficialGpt56Price(resolvedModel) ||
+    getOfficialGpt56Price(analyticsModel) ||
+    getOfficialGpt56Price(requestedModel);
+  const configuredPrice = resolvedPrice || analyticsPrice || requestedPrice;
+  const basePrice = configuredPrice
     ? {
         ...configuredPrice,
         prompt: isConfiguredPriceValue(configuredPrice.prompt, configuredPrice.promptConfigured)
@@ -1129,43 +1191,7 @@ export function calculateCost(
           : (behaviorFallback?.completion ?? 0),
       }
     : officialCandidatePrice;
-  if (!price) return 0;
-
-  const inputTokens = Math.max(toFiniteNumber(detail.tokens.input_tokens), 0);
-  const completionTokens = Math.max(toFiniteNumber(detail.tokens.output_tokens), 0);
-  const cachedTokens = Math.max(
-    Math.max(toFiniteNumber(detail.tokens.cached_tokens), 0),
-    Math.max(toFiniteNumber(detail.tokens.cache_tokens), 0)
-  );
-  const cacheReadTokens = Math.max(toFiniteNumber(detail.tokens.cache_read_tokens), 0);
-  const cacheCreationTokens = Math.max(toFiniteNumber(detail.tokens.cache_creation_tokens), 0);
-  const promptPrice = Number(price.prompt) || 0;
-  const completionPrice = Number(price.completion) || 0;
-  const configuredCacheReadPrice = Number(price.cacheRead) || 0;
-  const cacheReadPrice = isConfiguredPriceValue(configuredCacheReadPrice, price.cacheReadConfigured)
-    ? configuredCacheReadPrice
-    : isGpt56Model(behaviorModel)
-      ? promptPrice * 0.1
-      : Number(price.cache) || 0;
-  const configuredCacheCreationPrice = Number(price.cacheCreation) || 0;
-  const cacheCreationPrice = isConfiguredPriceValue(
-    configuredCacheCreationPrice,
-    price.cacheCreationConfigured
-  )
-    ? configuredCacheCreationPrice
-    : promptPrice * (isGpt56Model(behaviorModel) ? 1.25 : 1);
-  const readTokens = cachedTokens + cacheReadTokens;
-  const promptTokens = Math.max(inputTokens - readTokens - cacheCreationTokens, 0);
-  const longContext = supportsLongContextPremium(behaviorModel) && inputTokens > 272_000;
-  const inputMultiplier = longContext ? 2 : 1;
-  const outputMultiplier = longContext ? 1.5 : 1;
-  const standardCost =
-    ((promptTokens / TOKENS_PER_PRICE_UNIT) * promptPrice +
-      (cachedTokens / TOKENS_PER_PRICE_UNIT) * (Number(price.cache) || 0) +
-      (cacheReadTokens / TOKENS_PER_PRICE_UNIT) * cacheReadPrice +
-      (cacheCreationTokens / TOKENS_PER_PRICE_UNIT) * cacheCreationPrice) *
-      inputMultiplier +
-    (completionTokens / TOKENS_PER_PRICE_UNIT) * completionPrice * outputMultiplier;
+  if (!basePrice) return 0;
 
   const identity = [
     detail.executor_type,
@@ -1192,12 +1218,220 @@ export function calculateCost(
       detail.serviceTier ||
       detail.request_service_tier ||
       detail.requestServiceTier;
-  let multiplier = getServiceTierMultiplier(behaviorModel, serviceTier);
-  if (longContext && ['priority', 'fast'].includes(String(serviceTier ?? '').toLowerCase())) {
-    multiplier = 1;
-  }
+
+  const inputTokens = Math.max(toFiniteNumber(detail.tokens.input_tokens), 0);
+  const completionTokens = Math.max(toFiniteNumber(detail.tokens.output_tokens), 0);
+  const cachedTokens = Math.max(
+    Math.max(toFiniteNumber(detail.tokens.cached_tokens), 0),
+    Math.max(toFiniteNumber(detail.tokens.cache_tokens), 0)
+  );
+  const cacheReadTokens = Math.max(toFiniteNumber(detail.tokens.cache_read_tokens), 0);
+  const cacheCreationTokens = Math.max(toFiniteNumber(detail.tokens.cache_creation_tokens), 0);
+  const hasContextPricing = Boolean(basePrice.contextTiers?.length);
+  const contextTier = selectContextTierPrice(basePrice, inputTokens);
+  const longContext =
+    !hasContextPricing && supportsLongContextPremium(behaviorModel) && inputTokens > 272_000;
+  const normalizedServiceTier = String(serviceTier ?? '')
+    .trim()
+    .toLowerCase();
+  const longContextOverridesServiceTier =
+    longContext && (normalizedServiceTier === 'priority' || normalizedServiceTier === 'fast');
+  const serviceTierPrice =
+    !contextTier && !longContextOverridesServiceTier
+      ? selectServiceTierPrice(basePrice, serviceTier)
+      : undefined;
+  const price = contextTier
+    ? applyContextTierPrice(basePrice, contextTier)
+    : serviceTierPrice
+      ? applyServiceTierPrice(basePrice, serviceTierPrice)
+      : basePrice;
+  const promptPrice = Number(price.prompt) || 0;
+  const completionPrice = Number(price.completion) || 0;
+  const configuredCacheReadPrice = Number(price.cacheRead) || 0;
+  const cacheReadPrice = isConfiguredPriceValue(configuredCacheReadPrice, price.cacheReadConfigured)
+    ? configuredCacheReadPrice
+    : isGpt56Model(behaviorModel)
+      ? promptPrice * 0.1
+      : Number(price.cache) || 0;
+  const configuredCacheCreationPrice = Number(price.cacheCreation) || 0;
+  const cacheCreationPrice = isConfiguredPriceValue(
+    configuredCacheCreationPrice,
+    price.cacheCreationConfigured
+  )
+    ? configuredCacheCreationPrice
+    : promptPrice * (isGpt56Model(behaviorModel) ? 1.25 : 1);
+  const readTokens = cachedTokens + cacheReadTokens;
+  const promptTokens = Math.max(inputTokens - readTokens - cacheCreationTokens, 0);
+  const inputMultiplier = longContext ? 2 : 1;
+  const outputMultiplier = longContext ? 1.5 : 1;
+  const standardCost =
+    ((promptTokens / TOKENS_PER_PRICE_UNIT) * promptPrice +
+      (cachedTokens / TOKENS_PER_PRICE_UNIT) * (Number(price.cache) || 0) +
+      (cacheReadTokens / TOKENS_PER_PRICE_UNIT) * cacheReadPrice +
+      (cacheCreationTokens / TOKENS_PER_PRICE_UNIT) * cacheCreationPrice) *
+      inputMultiplier +
+    (completionTokens / TOKENS_PER_PRICE_UNIT) * completionPrice * outputMultiplier;
+
+  const multiplier =
+    longContextOverridesServiceTier || contextTier || serviceTierPrice
+      ? 1
+      : getServiceTierMultiplier(behaviorModel, serviceTier);
   const total = standardCost * multiplier;
   return Number.isFinite(total) && total > 0 ? total : 0;
+}
+
+function selectContextTierPrice(
+  price: ModelPrice,
+  inputTokens: number
+): ModelPriceContextTier | undefined {
+  return (price.contextTiers ?? []).reduce<ModelPriceContextTier | undefined>(
+    (selected, candidate) =>
+      inputTokens > candidate.thresholdTokens &&
+      (!selected || candidate.thresholdTokens > selected.thresholdTokens)
+        ? candidate
+        : selected,
+    undefined
+  );
+}
+
+function applyContextTierPrice(price: ModelPrice, tier: ModelPriceContextTier): ModelPrice {
+  return {
+    ...price,
+    prompt: tier.promptConfigured ? tier.prompt : price.prompt,
+    completion: tier.completionConfigured ? tier.completion : price.completion,
+    cache: tier.cacheConfigured ? tier.cache : price.cache,
+    cacheRead: tier.cacheReadConfigured ? tier.cacheRead : price.cacheRead,
+    cacheCreation: tier.cacheCreationConfigured ? tier.cacheCreation : price.cacheCreation,
+    promptConfigured: tier.promptConfigured ? true : price.promptConfigured,
+    completionConfigured: tier.completionConfigured ? true : price.completionConfigured,
+    cacheReadConfigured: tier.cacheReadConfigured ? true : price.cacheReadConfigured,
+    cacheCreationConfigured: tier.cacheCreationConfigured ? true : price.cacheCreationConfigured,
+  };
+}
+
+function selectServiceTierPrice(
+  price: ModelPrice,
+  serviceTier: string | undefined
+): ModelPriceServiceTier | undefined {
+  const normalized = String(serviceTier ?? '')
+    .trim()
+    .toLowerCase();
+  if (!normalized) return undefined;
+  return (price.serviceTiers ?? []).find(
+    (tier) => normalized === tier.mode || normalized === tier.serviceTier
+  );
+}
+
+function applyServiceTierPrice(price: ModelPrice, tier: ModelPriceServiceTier): ModelPrice {
+  return {
+    ...price,
+    prompt: tier.promptConfigured ? tier.prompt : price.prompt,
+    completion: tier.completionConfigured ? tier.completion : price.completion,
+    cache: tier.cacheConfigured ? tier.cache : price.cache,
+    cacheRead: tier.cacheReadConfigured ? tier.cacheRead : price.cacheRead,
+    cacheCreation: tier.cacheCreationConfigured ? tier.cacheCreation : price.cacheCreation,
+    promptConfigured: tier.promptConfigured ? true : price.promptConfigured,
+    completionConfigured: tier.completionConfigured ? true : price.completionConfigured,
+    cacheReadConfigured: tier.cacheReadConfigured ? true : price.cacheReadConfigured,
+    cacheCreationConfigured: tier.cacheCreationConfigured ? true : price.cacheCreationConfigured,
+  };
+}
+
+function normalizeContextTiers(value: unknown): ModelPriceContextTier[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const tiers: ModelPriceContextTier[] = [];
+  const thresholds = new Set<number>();
+  for (const item of value) {
+    if (!isRecord(item)) return undefined;
+    const thresholdTokens = Number(item.thresholdTokens);
+    if (
+      !Number.isSafeInteger(thresholdTokens) ||
+      thresholdTokens <= 0 ||
+      thresholds.has(thresholdTokens)
+    ) {
+      return undefined;
+    }
+    const prompt = toFiniteNumber(item.prompt);
+    const completion = toFiniteNumber(item.completion);
+    const cache = toFiniteNumber(item.cache);
+    const cacheRead = toFiniteNumber(item.cacheRead);
+    const cacheCreation = toFiniteNumber(item.cacheCreation);
+    if ([prompt, completion, cache, cacheRead, cacheCreation].some((rate) => rate < 0)) {
+      return undefined;
+    }
+    thresholds.add(thresholdTokens);
+    tiers.push({
+      thresholdTokens,
+      prompt,
+      completion,
+      cache,
+      cacheRead,
+      cacheCreation,
+      promptConfigured: item.promptConfigured === true,
+      completionConfigured: item.completionConfigured === true,
+      cacheConfigured: item.cacheConfigured === true,
+      cacheReadConfigured: item.cacheReadConfigured === true,
+      cacheCreationConfigured: item.cacheCreationConfigured === true,
+    });
+  }
+  return tiers.sort((left, right) => left.thresholdTokens - right.thresholdTokens);
+}
+
+function normalizeServiceTiers(value: unknown): ModelPriceServiceTier[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const tiers: ModelPriceServiceTier[] = [];
+  const identifiers = new Set<string>();
+  for (const item of value) {
+    if (!isRecord(item)) return undefined;
+    const mode = typeof item.mode === 'string' ? item.mode.trim().toLowerCase() : '';
+    const serviceTier =
+      typeof item.serviceTier === 'string' ? item.serviceTier.trim().toLowerCase() : '';
+    if (!mode || !serviceTier || identifiers.has(mode) || identifiers.has(serviceTier)) {
+      return undefined;
+    }
+    const prompt = toFiniteNumber(item.prompt);
+    const completion = toFiniteNumber(item.completion);
+    const cache = toFiniteNumber(item.cache);
+    const cacheRead = toFiniteNumber(item.cacheRead);
+    const cacheCreation = toFiniteNumber(item.cacheCreation);
+    if ([prompt, completion, cache, cacheRead, cacheCreation].some((rate) => rate < 0)) {
+      return undefined;
+    }
+    const promptConfigured = item.promptConfigured === true;
+    const completionConfigured = item.completionConfigured === true;
+    const cacheConfigured = item.cacheConfigured === true;
+    const cacheReadConfigured = item.cacheReadConfigured === true;
+    const cacheCreationConfigured = item.cacheCreationConfigured === true;
+    if (
+      !promptConfigured &&
+      !completionConfigured &&
+      !cacheConfigured &&
+      !cacheReadConfigured &&
+      !cacheCreationConfigured
+    ) {
+      return undefined;
+    }
+    identifiers.add(mode);
+    identifiers.add(serviceTier);
+    tiers.push({
+      mode,
+      serviceTier,
+      prompt,
+      completion,
+      cache,
+      cacheRead,
+      cacheCreation,
+      promptConfigured,
+      completionConfigured,
+      cacheConfigured,
+      cacheReadConfigured,
+      cacheCreationConfigured,
+    });
+  }
+  return tiers.sort(
+    (left, right) =>
+      left.mode.localeCompare(right.mode) || left.serviceTier.localeCompare(right.serviceTier)
+  );
 }
 
 export function loadModelPrices(): Record<string, ModelPrice> {
@@ -1230,9 +1464,15 @@ export function loadModelPrices(): Record<string, ModelPrice> {
         cache,
         cacheRead,
         cacheCreation,
+        promptConfigured: price.promptConfigured === true,
+        completionConfigured: price.completionConfigured === true,
+        cacheReadConfigured: price.cacheReadConfigured === true,
+        cacheCreationConfigured: price.cacheCreationConfigured === true,
         source: readDetailString(price.source),
         sourceModelId: readDetailString(price.sourceModelId),
         rawJson: readDetailString(price.rawJson),
+        contextTiers: normalizeContextTiers(price.contextTiers),
+        serviceTiers: normalizeServiceTiers(price.serviceTiers),
         updatedAtMs: toPositiveNumber(price.updatedAtMs),
         syncedAtMs: toPositiveNumber(price.syncedAtMs),
       };
@@ -1262,24 +1502,25 @@ export function clearModelPrices(): void {
   }
 }
 
+const COMPACT_NUMBER_UNITS = [
+  { threshold: 1_000_000_000_000_000, suffix: 'P' },
+  { threshold: 1_000_000_000_000, suffix: 'T' },
+  { threshold: 1_000_000_000, suffix: 'B' },
+  { threshold: 1_000_000, suffix: 'M' },
+  { threshold: 1_000, suffix: 'K' },
+];
+
 export function formatCompactNumber(value: number): string {
   const num = Number(value);
   if (!Number.isFinite(num)) return '0';
 
   const abs = Math.abs(num);
   if (abs === 0) return '0';
-  const units = [
-    { threshold: 1_000_000_000_000_000, suffix: 'P' },
-    { threshold: 1_000_000_000_000, suffix: 'T' },
-    { threshold: 1_000_000_000, suffix: 'B' },
-    { threshold: 1_000_000, suffix: 'M' },
-    { threshold: 1_000, suffix: 'K' },
-  ];
-  const unit = units.find((item) => abs >= item.threshold);
+  const unit = COMPACT_NUMBER_UNITS.find((item) => abs >= item.threshold);
 
   if (unit) {
     const formatted = (num / unit.threshold).toFixed(1);
-    const nextUnit = units[units.indexOf(unit) - 1];
+    const nextUnit = COMPACT_NUMBER_UNITS[COMPACT_NUMBER_UNITS.indexOf(unit) - 1];
     if (nextUnit && Math.abs(Number(formatted)) >= 1000) {
       return `${(num / nextUnit.threshold).toFixed(1)}${nextUnit.suffix}`;
     }
@@ -1289,16 +1530,36 @@ export function formatCompactNumber(value: number): string {
   return abs >= 1 ? num.toFixed(0) : num.toFixed(2);
 }
 
-export function formatUsd(value: number): string {
+export function formatUsd(value: number, fractionDigits = 2): string {
+  const num = Number(value);
+  const digits = Number.isInteger(fractionDigits) ? Math.max(0, Math.min(6, fractionDigits)) : 2;
+  if (!Number.isFinite(num)) return `$${(0).toFixed(digits)}`;
+
+  const fixed = num.toFixed(digits);
+  const parts = Number(fixed).toLocaleString(undefined, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+  return `$${parts}`;
+}
+
+export function formatCompactUsd(value: number): string {
   const num = Number(value);
   if (!Number.isFinite(num)) return '$0.00';
 
-  const fixed = num.toFixed(2);
-  const parts = Number(fixed).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-  return `$${parts}`;
+  const rounded = Number(num.toFixed(2));
+  const roundedAbs = Math.abs(rounded);
+  if (roundedAbs < 1_000) return formatUsd(num);
+
+  const unit = COMPACT_NUMBER_UNITS.find((item) => roundedAbs >= item.threshold);
+  if (!unit) return formatUsd(num);
+
+  const formatted = (num / unit.threshold).toFixed(2);
+  const nextUnit = COMPACT_NUMBER_UNITS[COMPACT_NUMBER_UNITS.indexOf(unit) - 1];
+  if (nextUnit && Math.abs(Number(formatted)) >= 1000) {
+    return `${formatUsd(num / nextUnit.threshold)}${nextUnit.suffix}`;
+  }
+  return `${formatUsd(num / unit.threshold)}${unit.suffix}`;
 }
 
 const resolveDurationLocale = (locale?: string): string | undefined =>

@@ -9,6 +9,7 @@ import type {
   VisualConfigValidationErrors,
 } from '@/types/visualConfig';
 import { DEFAULT_VISUAL_VALUES } from '@/types/visualConfig';
+import { normalizeRoutingStrategy } from '@/utils/routingStrategy';
 import {
   arePayloadFilterRulesEqual,
   arePayloadRulesEqual,
@@ -390,6 +391,10 @@ type VisualConfigAction =
   | {
       type: 'set_values';
       values: Partial<VisualConfigValues>;
+    }
+  | {
+      type: 'commit_api_keys';
+      apiKeysText: string;
     };
 
 function createInitialVisualConfigState(): VisualConfigState {
@@ -530,6 +535,9 @@ function getNextDirtyFields(
   }
   if (Object.prototype.hasOwnProperty.call(patch, 'loggingToFile')) {
     updateDirty('loggingToFile', nextValues.loggingToFile === baselineValues.loggingToFile);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'requestLog')) {
+    updateDirty('requestLog', nextValues.requestLog === baselineValues.requestLog);
   }
   if (Object.prototype.hasOwnProperty.call(patch, 'logsMaxTotalSizeMb')) {
     updateDirty(
@@ -694,6 +702,23 @@ function visualConfigReducer(
         dirtyFields: nextDirtyFields,
       };
     }
+    case 'commit_api_keys': {
+      const dirtyFields = new Set(state.dirtyFields);
+      dirtyFields.delete('apiKeysText');
+
+      return {
+        ...state,
+        visualValues: {
+          ...state.visualValues,
+          apiKeysText: action.apiKeysText,
+        },
+        baselineValues: {
+          ...state.baselineValues,
+          apiKeysText: action.apiKeysText,
+        },
+        dirtyFields,
+      };
+    }
     default:
       return state;
   }
@@ -786,6 +811,7 @@ export function useVisualConfig() {
           parsed['usage-statistics-enabled'] ?? parsed.usageStatisticsEnabled
         ),
         loggingToFile: Boolean(parsed['logging-to-file']),
+        requestLog: Boolean(parsed['request-log']),
         logsMaxTotalSizeMb: String(parsed['logs-max-total-size-mb'] ?? ''),
         errorLogsMaxFiles: String(parsed['error-logs-max-files'] ?? ''),
         redisUsageQueueRetentionSeconds: String(
@@ -853,7 +879,7 @@ export function useVisualConfig() {
         quotaSwitchPreviewModel: Boolean(quotaExceeded?.['switch-preview-model'] ?? false),
         quotaAntigravityCredits: Boolean(quotaExceeded?.['antigravity-credits'] ?? false),
 
-        routingStrategy: routing?.strategy === 'fill-first' ? 'fill-first' : 'round-robin',
+        routingStrategy: normalizeRoutingStrategy(routing?.strategy) ?? 'round-robin',
         routingSessionAffinity: Boolean(
           routing?.['session-affinity'] ?? routing?.sessionAffinity ?? routing?.['sessionAffinity']
         ),
@@ -995,6 +1021,9 @@ export function useVisualConfig() {
         }
         if (isDirty('loggingToFile')) {
           setBooleanInDoc(doc, ['logging-to-file'], values.loggingToFile);
+        }
+        if (isDirty('requestLog')) {
+          setBooleanInDoc(doc, ['request-log'], values.requestLog);
         }
         if (isDirty('logsMaxTotalSizeMb')) {
           setIntFromStringInDoc(doc, ['logs-max-total-size-mb'], values.logsMaxTotalSizeMb);
@@ -1341,6 +1370,10 @@ export function useVisualConfig() {
     dispatch({ type: 'set_values', values: newValues });
   }, []);
 
+  const commitApiKeysText = useCallback((apiKeysText: string) => {
+    dispatch({ type: 'commit_api_keys', apiKeysText });
+  }, []);
+
   return {
     visualValues,
     visualDirty,
@@ -1350,5 +1383,6 @@ export function useVisualConfig() {
     loadVisualValuesFromYaml,
     applyVisualChangesToYaml,
     setVisualValues,
+    commitApiKeysText,
   };
 }

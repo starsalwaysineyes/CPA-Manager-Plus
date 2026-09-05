@@ -48,3 +48,59 @@ describe('normalizeConfigResponse xAI API keys', () => {
     });
   });
 });
+
+describe('normalizeConfigResponse cooling overrides', () => {
+  it.each([
+    [true, true],
+    [false, false],
+    [null, null],
+  ] as const)('preserves %j instead of applying a boolean default', (value, expected) => {
+    const config = normalizeConfigResponse({
+      'gemini-api-key': [{ 'api-key': 'gemini-key', 'disable-cooling': value }],
+    });
+
+    expect(config.geminiApiKeys?.[0]?.disableCooling).toBe(expected);
+  });
+
+  it('leaves a missing cooling override unset', () => {
+    const config = normalizeConfigResponse({
+      'gemini-api-key': [{ 'api-key': 'gemini-key' }],
+    });
+
+    expect(config.geminiApiKeys?.[0]).not.toHaveProperty('disableCooling');
+  });
+});
+
+describe('normalizeConfigResponse Claude fingerprint profile', () => {
+  it('normalizes fingerprint-profile into the typed config', () => {
+    const config = normalizeConfigResponse({
+      'claude-api-key': [{ 'api-key': 'claude-secret', 'fingerprint-profile': 'claude-code-cli' }],
+    });
+
+    expect(config.claudeApiKeys?.[0]?.fingerprintProfile).toBe('claude-code-cli');
+  });
+
+  it('canonicalizes the legacy oauth-cli alias to claude-code-cli', () => {
+    const config = normalizeConfigResponse({
+      'claude-api-key': [
+        { 'api-key': 'claude-secret', 'fingerprint-profile': '  OAuth-CLI  ' },
+        { 'api-key': 'claude-secret', fingerprintProfile: 'oauth-cli' },
+        { 'api-key': 'claude-secret', fingerprint_profile: 'claude-code-cli' },
+      ],
+    });
+
+    expect(config.claudeApiKeys?.map((key) => key.fingerprintProfile)).toEqual([
+      'claude-code-cli',
+      'claude-code-cli',
+      'claude-code-cli',
+    ]);
+  });
+
+  it('leaves unknown fingerprint profiles unset in the typed config', () => {
+    const config = normalizeConfigResponse({
+      'claude-api-key': [{ 'api-key': 'claude-secret', 'fingerprint-profile': 'claude-desktop' }],
+    });
+
+    expect(config.claudeApiKeys?.[0]).not.toHaveProperty('fingerprintProfile');
+  });
+});
